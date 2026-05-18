@@ -97,13 +97,71 @@ return jdbcTemplate.query("""
 
 ### 5.3 동시성 3중 방어
 
-<!-- TBD: Task 23 — SELECT ... FOR UPDATE SKIP LOCKED (다중 인스턴스), Semaphore(N=16) + Virtual Thread (인스턴스 내), claimed_until lease 30s + ReaperWorker (stuck 복구). DispatchWorker 코드 참조. -->
+알림 시스템에서 발생할 수 있는 동시성 위협 3가지를 *각기 다른 layer* 에서 방어한다.
+
+| Layer | 위협 | 방어 |
+|---|---|---|
+| 1. 다중 인스턴스 worker | 같은 delivery_attempt 를 두 인스턴스가 동시에 처리 | `SELECT ... FOR UPDATE SKIP LOCKED` (`DeliveryAttemptRepository.findClaimableIds`) + `claimByIds` bulk update with `state = 'READY'` guard |
+| 2. 단일 인스턴스 내 외부 채널 보호 | 100 thread 가 동시에 외부 SMTP 에 폭주 | `Semaphore(semaphore-permits=16, fair)` — `DispatchWorker.dispatchAsync` 에서 `tryAcquire` + Virtual Thread submit. permit ownership 은 task 로 *이전* (이중 release 방지) |
+| 3. Stuck worker | 워커가 중도 사망 / hang 시 row 가 영구 IN_PROGRESS | `claimed_until` lease (30s) + reaper (`ReaperWorker` — Task 24 pending) 가 만료 row 를 `state=READY` 로 복귀. `DeliveryRelayService.releaseExpiredClaims` 구현 완료 |
+
+#### 왜 Virtual Thread + Semaphore 인가
+
+본 시스템의 worker 작업 = *외부 I/O 중심* (SMTP 호출, DB transaction). Platform thread 대신 Virtual Thread 를 쓰면 *수천 동시 dispatch* 도 OS thread 수 제약 없이 처리. Semaphore 는 *외부 채널* 의 분당 호출량을 캡 (외부 SMTP rate limit 보호) — Virtual Thread 의 동시성을 *명시적으로 제한* 하는 신호.
+
+`DispatchWorker.dispatchAsync` 의 permit ownership transfer 패턴 (`src/main/java/com/livenotification/delivery/adapter/in/scheduler/DispatchWorker.java`):
+
+1. `tryAcquire(1, TimeUnit.SECONDS)` 성공 → `acquired=true`
+2. `virtualThreadExecutor.submit(...)` 성공 → permit 책임이 task 로 이전, outer flag `acquired=false`
+3. Task 의 `finally` 가 `semaphore.release()`
+4. `submit` 실패 (`RejectedExecutionException`) → outer `finally` 가 release (`acquired` flag 가 아직 `true`)
+
+이 패턴으로 *어떤 경로로 끝나든 permit 누수 0*.
+
+#### dispatch-timeout 의 위치
+
+`DeliveryRelayService.invokeAdapter` 안에서 `CompletableFuture.supplyAsync(...).get(timeout, MILLIS)`. `TimeoutException` 은 `TransientFailure` 로 분류 — 재시도 큐에 다시 들어감. `dispatch-timeout (5s prod / 500ms test) < claim-lease (30s)` 관계로, 타임아웃이 reaper 보다 먼저 발동되어 ungraceful path 없이 자연스러운 retry. 파일: `src/main/java/com/livenotification/delivery/application/DeliveryRelayService.java`.
 
 ---
 
 ## 6. 테스트 전략
 
-<!-- TBD: Task 23 (Tier 분류 표: T1 동시성 IT / T2 기능 IT / T3 통합 IT + 미적용 표) + Task 30 (Phase 5 T3 IT 6개 추가) + Task 31 (ArchUnit 6 rules). 현재 Phase 2 완료: 도메인 invariant 단위 16개 + 통합 IT 6개 (ConcurrentDedupIT, EventDedupNoHeaderIT, IdempotencyReplayIT, IdempotencyConflictIT, DeliveryPerChannelDedupIT, MarkReadEmailOnlyRejectIT). -->
+### 6.1 Slice 분류
+
+| 슬라이스 | 도구 | 사용처 |
+|---|---|---|
+| Pure JUnit 단위 | JUnit 5 + AssertJ | VO compact constructor / entity invariant / RetryPolicy |
+| `@WebMvcTest` | mocked services | Controller + DTO + ProblemDetail (Phase 6 후속 추가) |
+| `@DataJpaTest` | Testcontainers | Repository custom query 검증 (Phase 6 후속 추가) |
+| `@SpringBootTest` | Testcontainers + `AbstractIntegrationTest` | 16개 IT — 등록/dedup/retry/markRead |
+
+### 6.2 Tier 분류
+
+| Tier | 범위 | 포함 테스트 | 현재 개수 |
+|---|---|---|---|
+| Tier 1 — 핵심 invariant 단위 | 도메인 invariant + retry policy + 스키마 + 채널 adapter | NotificationInvariantTest (3), DeliveryInvariantTest (5), DeliveryAttemptInvariantTest (5), IdempotencyRecordInvariantTest (2), NotificationSchemaTest (1), DeliverySchemaConstraintTest (1), RequestHashTest (5), RetryPolicyTest (7), EmailAdapterTest (4), InAppAdapterTest (2) | 35 |
+| Tier 2 — 명세 5조건 흐름 IT | 등록 + 3-layer dedup + retry + IN_APP 즉시 SENT + markRead 검증 | integration/dedup (8): ConcurrentDedupIT, EventDedupNoHeaderIT, IdempotencyConflictIT, DeliveryPerChannelDedupIT, IdempotencyReplayIT (4 cases). integration/markread (2): MarkReadEmailOnlyRejectIT, MarkReadInAppSuccessIT. integration/retry (6): RetrySuccessIT, RetryMaxAttemptsIT, PermanentFailureIT, DeliveryAttemptCountCumulativeIT, StateNonCorrespondenceIT, InAppImmediateSentIT | 16 |
+| Tier 3 — eng review 후속 IT | stuck recovery + admin retry + multi-worker + 대표 사용자 시나리오 + payload immutability | (Phase 4 + Phase 5 후속 추가) | TBD |
+
+`./gradlew test` 결과: 현재 51 tests (Tier 1 = 35, Tier 2 = 16). Phase 4/5/6 후속에서 Tier 3 / ArchUnit 추가로 ~70+ 으로 확장 예정.
+
+### 6.3 시간 가속 (test profile)
+
+`src/test/resources/application-test.yml` override:
+
+- `notification.retry.base-delay: 100ms` (prod 30s → 300배 가속)
+- `notification.retry.max-attempts: 3` (prod 5)
+- `notification.worker.poll-interval: 200ms` (prod 1s)
+- `notification.worker.dispatch-timeout: 500ms` (prod 5s)
+- `notification.worker.semaphore-permits: 4` (prod 16)
+
+prod 15분 retry cycle 이 test ~1.5s 안에 완료.
+
+### 6.4 Testcontainers 운영
+
+- `AbstractIntegrationTest` (`src/test/java/com/livenotification/integration/support/AbstractIntegrationTest.java`) — static `PostgreSQLContainer<>("postgres:16-alpine").withReuse(true)` + `@DynamicPropertySource` 로 DataSource 주입. `~/.testcontainers.properties` 에 `testcontainers.reuse.enable=true` 설정 시 JVM 안 모든 IT 가 같은 컨테이너 공유 → 부팅 가속.
+- Windows + Docker Desktop 환경 호환: `build.gradle.kts` 에 `DOCKER_HOST=npipe:////./pipe/docker_engine_linux` + `api.version=1.44` 설정.
+- `@BeforeEach truncate` — async worker 가 별 트랜잭션 commit 하므로 명시 truncate 로 격리.
 
 ---
 
