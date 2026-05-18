@@ -67,4 +67,13 @@ public interface DeliveryAttemptRepository extends JpaRepository<DeliveryAttempt
         WHERE state = 'IN_PROGRESS' AND claimed_until < :now
         """, nativeQuery = true)
     int releaseStuck(@Param("now") Instant now);
+
+    @Modifying
+    @Query("""
+        DELETE FROM DeliveryAttempt a
+        WHERE a.state IN :states AND a.updatedAt < :cutoff
+        """)
+    int deleteByStateInAndUpdatedAtBefore(
+        @Param("states") java.util.Collection<DeliveryAttemptState> states,
+        @Param("cutoff") java.time.Instant cutoff);
 }
