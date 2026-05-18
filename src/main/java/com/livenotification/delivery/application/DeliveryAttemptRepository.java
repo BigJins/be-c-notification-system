@@ -12,7 +12,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-public interface DeliveryAttemptRepository extends JpaRepository<DeliveryAttempt, DeliveryAttemptId> {
+public interface DeliveryAttemptRepository extends JpaRepository<DeliveryAttempt, UUID> {
 
     @Query(value = """
         SELECT id FROM delivery_attempt
@@ -56,4 +56,15 @@ public interface DeliveryAttemptRepository extends JpaRepository<DeliveryAttempt
         WHERE state = 'IN_PROGRESS' AND claimed_until < :now
         """, nativeQuery = true)
     List<DeliveryAttempt> findStuckAttempts(@Param("now") Instant now);
+
+    @Modifying
+    @Query(value = """
+        UPDATE delivery_attempt
+        SET state = 'READY',
+            claimed_by = NULL,
+            claimed_until = NULL,
+            updated_at = :now
+        WHERE state = 'IN_PROGRESS' AND claimed_until < :now
+        """, nativeQuery = true)
+    int releaseStuck(@Param("now") Instant now);
 }

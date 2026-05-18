@@ -1,5 +1,6 @@
 package com.livenotification.global.config;
 
+import com.livenotification.delivery.domain.RetryPolicy;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.TaskScheduler;
@@ -26,6 +27,14 @@ public class WorkerConfig {
     @Bean
     public Clock clock() {
         return Clock.systemUTC();
+    }
+
+    @Bean
+    public RetryPolicy retryPolicy(NotificationProperties properties) {
+        return new RetryPolicy(
+            properties.retry().baseDelay(),
+            properties.retry().maxAttempts(),
+            properties.retry().jitterFraction());
     }
 
     @Bean
