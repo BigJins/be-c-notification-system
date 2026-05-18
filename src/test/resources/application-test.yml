@@ -2,4 +2,4 @@
 # DB datasource 설정 없음 — @ServiceConnection + PostgreSQLContainer 가 유일 (Task 17 참조).
 notification:
   retry: { base-delay: 100ms, max-attempts: 3 }
-  worker: { poll-interval: 200ms, semaphore-permits: 4, dispatch-timeout: 500ms }
+  worker: { poll-interval: 200ms, semaphore-permits: 4, dispatch-timeout: 500ms, reaper-interval: 500ms }
