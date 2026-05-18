@@ -6,6 +6,8 @@ import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -15,10 +17,23 @@ import java.util.UUID;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Getter @EqualsAndHashCode(of = "id") @ToString(of = {"id", "deliveryId", "state", "attemptCount"})
 public class DeliveryAttempt {
-    @Id private DeliveryAttemptId id;
-    @Column(name = "delivery_id", updatable = false, nullable = false) private DeliveryId deliveryId;
+    @Id
+    @Convert(converter = DeliveryAttemptIdConverter.class)
+    @JdbcTypeCode(SqlTypes.UUID)
+    private DeliveryAttemptId id;
+
+    @Convert(converter = DeliveryIdConverter.class)
+    @JdbcTypeCode(SqlTypes.UUID)
+    @Column(name = "delivery_id", updatable = false, nullable = false)
+    private DeliveryId deliveryId;
+
     @Enumerated(EnumType.STRING) @Column(nullable = false) private DeliveryAttemptState state;
-    @Column(name = "attempt_count", nullable = false) private DeliveryAttemptSessionCount attemptCount;
+
+    @Convert(converter = DeliveryAttemptSessionCountConverter.class)
+    @JdbcTypeCode(SqlTypes.INTEGER)
+    @Column(name = "attempt_count", nullable = false)
+    private DeliveryAttemptSessionCount attemptCount;
+
     @Column(name = "next_attempt_at") private Instant nextAttemptAt;
     @Column(name = "claimed_by") private String claimedBy;
     @Column(name = "claimed_until") private Instant claimedUntil;

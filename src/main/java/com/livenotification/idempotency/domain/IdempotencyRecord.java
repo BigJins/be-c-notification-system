@@ -6,6 +6,8 @@ import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -16,8 +18,17 @@ import java.util.UUID;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Getter @EqualsAndHashCode(of = "idempotencyKey") @ToString(of = {"idempotencyKey", "targetId"})
 public class IdempotencyRecord {
-    @Id @Column(name = "idempotency_key") private IdempotencyKey idempotencyKey;
-    @Column(name = "request_hash", updatable = false, nullable = false) private RequestHash requestHash;
+    @Id
+    @Convert(converter = IdempotencyKeyConverter.class)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "idempotency_key")
+    private IdempotencyKey idempotencyKey;
+
+    @Convert(converter = RequestHashConverter.class)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "request_hash", updatable = false, nullable = false)
+    private RequestHash requestHash;
+
     @Column(name = "target_id",   updatable = false, nullable = false) private UUID targetId;  // raw UUID — module-independent
     @Column(name = "created_at",  updatable = false, nullable = false) private Instant createdAt;
     @Column(name = "expires_at",  updatable = false, nullable = false) private Instant expiresAt;

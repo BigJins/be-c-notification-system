@@ -21,14 +21,28 @@ import java.util.UUID;
 @EqualsAndHashCode(of = "id")
 @ToString(of = {"id", "eventId", "recipientId", "type"})
 public class Notification {
-    @Id private NotificationId id;
-    @Column(name = "event_id",     updatable = false, nullable = false) private EventId eventId;
-    @Column(name = "recipient_id", updatable = false, nullable = false) private RecipientId recipientId;
+    @Id
+    @Convert(converter = NotificationIdConverter.class)
+    @JdbcTypeCode(SqlTypes.UUID)
+    private NotificationId id;
+
+    @Convert(converter = EventIdConverter.class)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "event_id", updatable = false, nullable = false)
+    private EventId eventId;
+
+    @Convert(converter = RecipientIdConverter.class)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "recipient_id", updatable = false, nullable = false)
+    private RecipientId recipientId;
+
     @Enumerated(EnumType.STRING) @Column(updatable = false, nullable = false) private NotificationType type;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "payload", columnDefinition = "jsonb", updatable = false, nullable = false)
     @Getter(AccessLevel.NONE)   // raw JsonNode getter hidden — VO accessor only
     private JsonNode payload;
+
     @Column(name = "read_at") private Instant readAt;
     @Column(name = "created_at", updatable = false, nullable = false) private Instant createdAt;
     @Column(name = "updated_at", nullable = false) private Instant updatedAt;

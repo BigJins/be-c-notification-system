@@ -1,12 +1,15 @@
 package com.livenotification.delivery.domain;
 
 import com.livenotification.notification.domain.NotificationId;
+import com.livenotification.notification.domain.NotificationIdConverter;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -16,11 +19,24 @@ import java.util.UUID;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Getter @EqualsAndHashCode(of = "id") @ToString(of = {"id", "notificationId", "channel", "state"})
 public class Delivery {
-    @Id private DeliveryId id;
-    @Column(name = "notification_id", updatable = false, nullable = false) private NotificationId notificationId;
+    @Id
+    @Convert(converter = DeliveryIdConverter.class)
+    @JdbcTypeCode(SqlTypes.UUID)
+    private DeliveryId id;
+
+    @Convert(converter = NotificationIdConverter.class)
+    @JdbcTypeCode(SqlTypes.UUID)
+    @Column(name = "notification_id", updatable = false, nullable = false)
+    private NotificationId notificationId;
+
     @Enumerated(EnumType.STRING) @Column(updatable = false, nullable = false) private ChannelType channel;
     @Enumerated(EnumType.STRING) @Column(nullable = false) private DeliveryState state;
-    @Column(name = "attempt_count", nullable = false) private DeliveryAttemptCount attemptCount;
+
+    @Convert(converter = DeliveryAttemptCountConverter.class)
+    @JdbcTypeCode(SqlTypes.INTEGER)
+    @Column(name = "attempt_count", nullable = false)
+    private DeliveryAttemptCount attemptCount;
+
     @Column(name = "last_error") private String lastError;
     @Column(name = "sent_at") private Instant sentAt;
     @Column(name = "created_at", updatable = false, nullable = false) private Instant createdAt;
