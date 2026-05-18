@@ -45,4 +45,15 @@ dependencies {
     testImplementation("com.tngtech.archunit:archunit-junit5:1.3.0")
 }
 
-tasks.named<Test>("test") { useJUnitPlatform() }
+// Pin Testcontainers to a version with working Docker API negotiation
+// (1.20.6 from Spring Boot 3.4 BOM has issues with newer Docker engines)
+dependencyManagement {
+    imports {
+        mavenBom("org.testcontainers:testcontainers-bom:1.21.3")
+    }
+}
+
+tasks.named<Test>("test") {
+    useJUnitPlatform()
+    systemProperty("testcontainers.reuse.enable", "true")
+}
