@@ -18,15 +18,120 @@ LiveClass 채용 과제 — 알림 발송 시스템 구현. Spring Boot 3.4 + Ja
 
 ## 1. 프로젝트 개요
 
-<!-- TBD: Task 34 — Path B 채널 fan-out 5분 컷 8 step 시나리오 (POST→GET→worker tick→dedup replay→Swagger→Grafana). design §8 "5분 데모 sequence" 기반. -->
+LiveClass 채용 과제 — 알림 발송 시스템. Spring Boot 3.4.5 + Java 21 + PostgreSQL 16.
+
+### 핵심 frame
+
+- **Path B (channel-as-transport)**: notification 1 = 사용자 event 1. channel 별 delivery N. fan-out 자연 표현.
+- **3-Layer Dedup**: 1차 (notification UNIQUE), 1.5차 (delivery UNIQUE), 2차 (Idempotency-Key header + 24h TTL).
+- **Outbox 1-tx N-aggregate**: 등록 시점 한 트랜잭션 안에 notification + delivery N + delivery_attempt N + idempotency_record 0/1 = 최대 6 INSERT.
+- **IN_APP 즉시 SENT**: IN_APP delivery 는 worker 안 거치고 등록 시 즉시 SENT (invariant #4). EMAIL 만 worker 가 폴링.
+- **운영 끝판**: ReaperWorker (stuck recovery) + AdminRetry + Micrometer 11 metrics + ArchUnit 6 rules.
+
+### 5분 컷 시나리오 (8 step)
+
+| # | 시점 | 동작 | 기대 |
+|---|---|---|---|
+| 1 | 0s | `docker compose up -d postgres` + `./gradlew bootRun` | Spring Boot 부팅 + Flyway V1__init.sql 자동 적용 + 8080 listen |
+| 2 | 5s | `curl -X POST /v1/notifications -d '{"eventId":"e1","recipientId":"u1","type":"PAYMENT_CONFIRMED","channels":["EMAIL","IN_APP"],"payload":{"subject":"hello","body":"world"}}'` | 202 + body `deliveries[2]` (EMAIL PENDING, IN_APP SENT) + `X-Event-Duplicate: false` |
+| 3 | 6s | `curl GET /v1/notifications/{id}` | IN_APP delivery state=SENT (즉시), EMAIL delivery state=PENDING |
+| 4 | 7s | (worker 1초 후 자동 dispatch) GET 재호출 | EMAIL delivery state=SENT (worker 처리 완료) |
+| 5 | 10s | 같은 event_id 로 다시 POST | 200 + `X-Event-Duplicate: true` (1차 dedup) |
+| 6 | 12s | POST + `Idempotency-Key: k1`, 다시 POST + `Idempotency-Key: k1` (같은 body) | 첫 202, 두 번째 200 + `X-Idempotent-Replay: true` |
+| 7 | 15s | `payload.x_test_failure=transient` 로 POST → DEAD 후 admin retry: `POST /v1/admin/notifications/{id}/retry -H "X-Admin-Token: dev-token-do-not-use-in-prod"` | 204 + delivery 재기동 |
+| 8 | 20s | `curl /actuator/prometheus \| grep notification` | 11개 metrics 노출 (`notification_registered_total`, `delivery_dispatched_total`, `delivery_dead_total` 등) |
+
+### 디렉터리 구조
+
+```
+src/main/java/com/livenotification/
+├── notification/        <- Notification AR + 등록 흐름 + 3-layer dedup
+├── delivery/            <- Delivery + DeliveryAttempt AR + worker + retry
+├── idempotency/         <- Idempotency-Key 헤더 기반 2차 dedup
+├── admin/               <- 운영 endpoint (X-Admin-Token)
+└── global/              <- 공통 config (Properties, WorkerConfig, SecurityConfig)
+```
 
 ## 2. 기술 스택
 
-<!-- TBD: Task 34 — Java 21 / Spring Boot 3.4 / PostgreSQL 16 / Flyway / Lombok / Testcontainers / Micrometer+Prometheus / ArchUnit / Springdoc OpenAPI / k6 의존성 목록 + 선택 근거. -->
+| 영역 | 라이브러리 | 사유 |
+|---|---|---|
+| Runtime | Java 21 | record, sealed interface, Virtual Thread |
+| Framework | Spring Boot 3.4.5 | Auto-config + Actuator + Security + Data JPA + Validation |
+| 영속 | PostgreSQL 16 + JPA + Hibernate 6.5+ | JSONB native + SKIP LOCKED + FK CASCADE |
+| Migration | Flyway 10.x | V1__init.sql 단일 마이그레이션 |
+| 빌더 | Lombok | `@NoArgsConstructor(PROTECTED)`, `@Getter` (no `@Setter`), `@RequiredArgsConstructor` |
+| 동시성 | Virtual Thread + Semaphore + SKIP LOCKED | 외부 I/O 중심 worker, multi-instance race 방어 |
+| Observability | Micrometer + Prometheus + Grafana | 11개 metric + 6 panel 대시보드 (`infra/grafana/`) |
+| API 문서 | Springdoc OpenAPI 2.6.0 | `/swagger-ui.html`, controller `@Tag` 1줄만 |
+| Test | JUnit 5 + AssertJ + Awaitility + Testcontainers + ArchUnit 1.3.0 | 77 tests (38 unit + 33 IT + 6 ArchUnit) |
+| 부하 시험 | k6 | dedup-race + throughput (`infra/k6/`) |
 
 ## 3. 실행 방법
 
-<!-- TBD: Task 34 — docker compose up postgres + ./gradlew bootRun + curl 예제 4개 (신규 등록 202, 중복 이벤트 200, Idempotency-Key replay 200, markRead 204) + Swagger UI URL. -->
+### 사전 요구사항
+
+- Docker (PostgreSQL 16 컨테이너 용)
+- Java 21 JDK (Gradle toolchain 자동 provisioning 도 가능)
+- (선택) k6 (부하 시험 용)
+
+### 시작
+
+```bash
+# 1. PostgreSQL 컨테이너 시작
+docker compose up -d postgres
+
+# 2. Spring Boot 실행 — Flyway 가 V1__init.sql 자동 적용
+./gradlew bootRun
+```
+
+### 검증 curl 예제
+
+```bash
+# 등록 (channels=[EMAIL, IN_APP]) — 202 + X-Event-Duplicate: false
+curl -X POST http://localhost:8080/v1/notifications \
+  -H "Content-Type: application/json" \
+  -d '{"eventId":"demo-1","recipientId":"u1","type":"PAYMENT_CONFIRMED","channels":["EMAIL","IN_APP"],"payload":{"subject":"hello","body":"world"}}'
+
+# 중복 이벤트 재등록 — 200 + X-Event-Duplicate: true
+curl -X POST http://localhost:8080/v1/notifications \
+  -H "Content-Type: application/json" \
+  -d '{"eventId":"demo-1","recipientId":"u1","type":"PAYMENT_CONFIRMED","channels":["EMAIL","IN_APP"],"payload":{"subject":"hello","body":"world"}}'
+
+# Idempotency-Key replay — 첫 POST 202, 두 번째 POST 200 + X-Idempotent-Replay: true
+curl -X POST http://localhost:8080/v1/notifications \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: my-key-1" \
+  -d '{"eventId":"demo-2","recipientId":"u1","type":"PAYMENT_CONFIRMED","channels":["EMAIL"],"payload":{"subject":"hello","body":"world"}}'
+
+# 조회
+curl http://localhost:8080/v1/notifications/{id}
+
+# IN_APP markRead (IN_APP delivery 가 SENT 일 때만 성공 — 204)
+curl -X POST http://localhost:8080/v1/notifications/{id}/read
+
+# 관리자 재기동 (X-Admin-Token 필요; 기본 dev-token-do-not-use-in-prod)
+curl -X POST http://localhost:8080/v1/admin/notifications/{id}/retry \
+  -H "X-Admin-Token: dev-token-do-not-use-in-prod"
+
+# Prometheus 메트릭
+curl http://localhost:8080/actuator/prometheus | grep notification
+```
+
+### Swagger UI
+
+`http://localhost:8080/swagger-ui.html` — REST API 자동 문서.
+
+### 환경 변수
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `DB_HOST` | `localhost` | PostgreSQL 호스트 |
+| `DB_PORT` | `5432` | PostgreSQL 포트 |
+| `DB_NAME` | `notification` | 데이터베이스 이름 |
+| `DB_USER` | `notification` | 사용자명 |
+| `DB_PASSWORD` | `notification` | 비밀번호 |
+| `ADMIN_TOKEN` | `dev-token-do-not-use-in-prod` | production 에서 반드시 override |
 
 ---
 
@@ -143,6 +248,45 @@ return jdbcTemplate.query("""
 
 `DeliveryRelayService.invokeAdapter` 안에서 `CompletableFuture.supplyAsync(...).get(timeout, MILLIS)`. `TimeoutException` 은 `TransientFailure` 로 분류 — 재시도 큐에 다시 들어감. `dispatch-timeout (5s prod / 500ms test) < claim-lease (30s)` 관계로, 타임아웃이 reaper 보다 먼저 발동되어 ungraceful path 없이 자연스러운 retry. 파일: `src/main/java/com/livenotification/delivery/application/DeliveryRelayService.java`.
 
+### 5.4 ERD
+
+```mermaid
+erDiagram
+    notification ||--o{ delivery : "1:N (channel 별)"
+    delivery ||--o{ delivery_attempt : "1:N (retry session 마다)"
+    notification {
+        UUID id PK
+        VARCHAR event_id "UQ(event_id, recipient_id, type)"
+        VARCHAR recipient_id
+        VARCHAR type "ENUM"
+        JSONB payload
+        TIMESTAMPTZ read_at
+    }
+    delivery {
+        UUID id PK
+        UUID notification_id FK
+        VARCHAR channel "UQ(notification_id, channel)"
+        VARCHAR state
+        INTEGER attempt_count
+        TIMESTAMPTZ sent_at "ck_sent_at_state_sync"
+    }
+    delivery_attempt {
+        UUID id PK
+        UUID delivery_id FK
+        VARCHAR state
+        INTEGER attempt_count
+        TIMESTAMPTZ next_attempt_at
+        VARCHAR claimed_by "ck_claim_sync"
+        TIMESTAMPTZ claimed_until
+    }
+    idempotency_record {
+        VARCHAR idempotency_key PK
+        VARCHAR request_hash
+        UUID target_id
+        TIMESTAMPTZ expires_at "24h TTL"
+    }
+```
+
 ---
 
 ## 6. 테스트 전략
@@ -154,17 +298,18 @@ return jdbcTemplate.query("""
 | Pure JUnit 단위 | JUnit 5 + AssertJ | VO compact constructor / entity invariant / RetryPolicy |
 | `@WebMvcTest` | mocked services | Controller + DTO + ProblemDetail (Phase 6 후속 추가) |
 | `@DataJpaTest` | Testcontainers | Repository custom query 검증 (Phase 6 후속 추가) |
-| `@SpringBootTest` | Testcontainers + `AbstractIntegrationTest` | 16개 IT — 등록/dedup/retry/markRead |
+| `@SpringBootTest` | Testcontainers + `AbstractIntegrationTest` | 33개 IT — 등록/dedup/retry/markRead/recovery/admin/cleanup |
 
 ### 6.2 Tier 분류
 
 | Tier | 범위 | 포함 테스트 | 현재 개수 |
 |---|---|---|---|
-| Tier 1 — 핵심 invariant 단위 | 도메인 invariant + retry policy + 스키마 + 채널 adapter | NotificationInvariantTest (3), DeliveryInvariantTest (5), DeliveryAttemptInvariantTest (5), IdempotencyRecordInvariantTest (2), NotificationSchemaTest (1), DeliverySchemaConstraintTest (1), RequestHashTest (5), RetryPolicyTest (7), EmailAdapterTest (4), InAppAdapterTest (2) | 35 |
+| Tier 1 — 핵심 invariant 단위 | 도메인 invariant + retry policy + 스키마 + 채널 adapter + worker | NotificationInvariantTest (3), DeliveryInvariantTest (5), DeliveryAttemptInvariantTest (5), IdempotencyRecordInvariantTest (2), NotificationSchemaTest (1), DeliverySchemaConstraintTest (1), RequestHashTest (5), RetryPolicyTest (7), EmailAdapterTest (4), InAppAdapterTest (2), DispatchWorkerTest (2), DeliveryRelayServiceTest (1) | 38 |
 | Tier 2 — 명세 5조건 흐름 IT | 등록 + 3-layer dedup + retry + IN_APP 즉시 SENT + markRead 검증 | integration/dedup (8): ConcurrentDedupIT, EventDedupNoHeaderIT, IdempotencyConflictIT, DeliveryPerChannelDedupIT, IdempotencyReplayIT (4 cases). integration/markread (2): MarkReadEmailOnlyRejectIT, MarkReadInAppSuccessIT. integration/retry (6): RetrySuccessIT, RetryMaxAttemptsIT, PermanentFailureIT, DeliveryAttemptCountCumulativeIT, StateNonCorrespondenceIT, InAppImmediateSentIT | 16 |
-| Tier 3 — eng review 후속 IT | stuck recovery + admin retry + multi-worker + 대표 사용자 시나리오 + payload immutability | (Phase 4 + Phase 5 후속 추가) | TBD |
+| Tier 3 — eng review 후속 IT | stuck recovery + admin retry + multi-worker + 대표 사용자 시나리오 + payload immutability + cleanup | integration/recovery (3): StuckRecoveryIT, MultiWorkerIT, DurabilityIT. integration/admin (4): AdminRetryIT. integration/tier3 (7): NotificationFlowIT, AdminRetryUsesCurrentPayloadIT, HeaderAndEventCompositionIT, MultiChannelFanOutIT, NotificationPayloadImmutabilityIT (2), PartialChannelFailureIT. integration/cleanup (3): DeliveryAttemptCleanupIT, IdempotencyExpiryIT (2) | 17 |
+| ArchUnit | 아키텍처 경계 규칙 | ArchitectureTest (6 @ArchTest) | 6 |
 
-`./gradlew test` 결과: 현재 51 tests (Tier 1 = 35, Tier 2 = 16). Phase 4/5/6 후속에서 Tier 3 / ArchUnit 추가로 ~70+ 으로 확장 예정.
+`./gradlew test` 결과: 77 tests (Tier 1 = 38, Tier 2 = 16, Tier 3 = 17, ArchUnit = 6). BUILD SUCCESSFUL.
 
 ### 6.3 시간 가속 (test profile)
 
@@ -188,7 +333,38 @@ prod 15분 retry cycle 이 test ~1.5s 안에 완료.
 
 ## 7. 부하 시험 결과
 
-<!-- TBD: Task 34 — k6 `dedup-race.js` (100 VU 동일 키 동시 → 1건만 생성 검증) + `throughput.js` (100 RPS 60초 지속 → P95 응답시간 + 폴링 지연) 결과 표. -->
+`infra/k6/` 2 스크립트:
+
+### 7.1 dedup-race.js
+
+100 VU 가 같은 event_id 로 1회씩 동시 POST. 기대: 1×202 + 99×200(X-Event-Duplicate=true).
+
+실행:
+```bash
+docker compose up -d postgres && ./gradlew bootRun &   # 백그라운드 실행
+sleep 15   # 부팅 대기
+k6 run infra/k6/dedup-race.js
+```
+
+기대 결과:
+- `event_accepted_202`: 정확히 1 (PostgreSQL `INSERT ... ON CONFLICT DO NOTHING` 의 원자 보장)
+- `event_duplicate_200`: 정확히 99
+- 모든 응답 `http_req_failed < 1%`
+
+### 7.2 throughput.js
+
+100 RPS 60초 지속. 각 iteration 마다 unique event_id (dedup 자극 X). channels=[EMAIL, IN_APP] 로 fan-out.
+
+실행:
+```bash
+k6 run infra/k6/throughput.js
+```
+
+기대 (튜닝 출발 threshold):
+- `http_req_duration p(95) < 500ms`
+- `http_req_failed < 1%`
+
+> 본 과제는 development 환경 (Docker Desktop / 로컬 PG / Gradle dev mode) 에서 실행 — production-grade 환경 (PG 별 인스턴스 + tuned Hikari) 에서 추가 측정 권장.
 
 ---
 
@@ -226,4 +402,29 @@ prod 15분 retry cycle 이 test ~1.5s 안에 완료.
 
 ## 9. AI 활용 문서
 
-<!-- TBD: Task 34 — Claude Code + gstack /superpowers 흐름 (brainstorming → writing-plans → executing-plans), design v3.3→v3.4 Path B 전환 의사결정 이력, 총 iteration 수 + 주요 correction 목록. -->
+본 과제 진행에 사용한 AI 도구 + 출력물.
+
+### 사용 흐름
+
+1. **brainstorming**: Claude `/superpowers:brainstorming` — 도메인 frame + 14 핵심 결정 (channel-as-transport, 3-layer dedup, Outbox 1-tx N-aggregate, Virtual Thread + Semaphore, IN_APP 즉시 SENT 등)
+2. **plan-ceo-review**: gstack `/plan-ceo-review` — Phase-parallel README + "설계는 깊게, 설명은 정직하게" 시그너처
+3. **plan-eng-review**: gstack `/plan-eng-review` — 17 IT 시나리오 분류 + Tier 분류
+4. **writing-plans**: Claude `/superpowers:writing-plans` — 본 plan (`docs/superpowers/plans/2026-05-16-be-c-notification-implementation.md`) 34 task 분해
+5. **subagent-driven-development**: Claude `/superpowers:subagent-driven-development` — 본 plan 실행. task 단위로 implementer dispatch + spec/quality reviewer 검토. 일부 task (특히 T17) 는 Codex 가 직접 수정 + Claude 가 이후 task 부터 Codex 스타일 패턴 학습 후 적용.
+
+### 주요 출력물 (chronological)
+
+- `docs/document.md` — design v3.4 (8 § sections)
+- `docs/superpowers/specs/2026-05-16-be-c-notification-code-spec-design.md` — 코드 레벨 spec
+- `docs/superpowers/plans/2026-05-16-be-c-notification-implementation.md` — 34-task implementation plan
+- `~/.gstack/projects/assignment/ceo-plans/2026-05-16-be-c-notification-path-b.md` — CEO plan (정직 미구현)
+- `~/.gstack/projects/assignment/kim-main-eng-review-test-plan-20260516.md` — eng test plan
+- `~/.gstack/projects/assignment/kim-main-design-20260516-210124.md` — v3.4 design grill 전체 이력 (channel-as-identity → channel-as-transport reshape 정당화)
+
+### 코딩 스타일
+
+본 코드베이스는 entity 저장을 *primitive* 로 하고 (UUID/String/int), VO 접근을 manual getter 로 wrap 하는 *double-getter* 패턴. 1차/2차 dedup 은 `INSERT ... ON CONFLICT DO NOTHING` (NamedParameterJdbcTemplate) 으로 atomic 처리 — JPA try/catch DataIntegrityViolation 패턴보다 persistence-context 안전.
+
+### v3.3 → v3.4 전환 이력 요약
+
+초기 설계(v3.3)는 channel 이 notification identity 의 일부였다 (channel-as-identity). grill 과정에서 multi-channel fan-out 표현과 read_at 의 owner 문제가 드러나면서 v3.4 에서 channel = transport 로 reshape. 전체 grill 이력: `~/.gstack/projects/assignment/kim-main-design-20260516-210124.md`.
