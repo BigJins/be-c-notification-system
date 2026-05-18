@@ -1,6 +1,7 @@
 package com.livenotification.delivery.application;
 
 import com.livenotification.delivery.adapter.out.channel.ChannelRouter;
+import com.livenotification.delivery.application.metrics.DeliveryMetrics;
 import com.livenotification.delivery.application.port.ChannelAdapter;
 import com.livenotification.delivery.domain.Delivery;
 import com.livenotification.delivery.domain.DeliveryAttempt;
@@ -43,6 +44,7 @@ public class DeliveryRelayService {
     private final NotificationProperties properties;
     private final ExecutorService virtualThreadExecutor;
     private final Clock clock;
+    private final DeliveryMetrics metrics;
 
     /**
      * Claim a batch of READY attempts in their own transaction so the lock
@@ -79,27 +81,36 @@ public class DeliveryRelayService {
             .orElseThrow(() -> new IllegalStateException(
                 "notification view not found: " + delivery.getNotificationId()));
 
+        long startNs = System.nanoTime();
         DispatchResult result = invokeAdapter(notification, delivery);
+        long elapsedNs = System.nanoTime() - startNs;
+        metrics.dispatchTimer(delivery.getChannel(), notification.type())
+            .record(elapsedNs, TimeUnit.NANOSECONDS);
+
         Instant now = clock.instant();
 
         switch (result) {
             case DispatchResult.Success ignored -> {
-                attempt.markDone(now);
+                attempt.markDone(attempt.getAttemptCount().increment(), now);
                 delivery.markSent(now);
+                metrics.recordDispatched(delivery.getChannel(), notification.type(), "SENT");
             }
             case DispatchResult.PermanentFailure perm -> {
-                attempt.markFailed(attempt.getAttemptCount().increment(), perm.reason(), now);
-                delivery.markDead(perm.reason(), now);
+                finalizeFailure(attempt, delivery, perm.reason(), now);
+                metrics.recordDispatched(delivery.getChannel(), notification.type(), "FAILED_PERMANENT");
+                metrics.recordDead(delivery.getChannel(), notification.type());
             }
             case DispatchResult.TransientFailure trans -> {
                 DeliveryAttemptSessionCount nextCount = attempt.getAttemptCount().increment();
                 if (retryPolicy.shouldDead(nextCount, trans)) {
-                    attempt.markFailed(nextCount, trans.reason(), now);
-                    delivery.markDead(trans.reason(), now);
+                    finalizeFailure(attempt, delivery, trans.reason(), now);
+                    metrics.recordDispatched(delivery.getChannel(), notification.type(), "FAILED_TRANSIENT_DEAD");
+                    metrics.recordDead(delivery.getChannel(), notification.type());
                 } else {
                     Instant nextAttemptAt = retryPolicy.nextAttemptAt(nextCount, clock);
                     attempt.scheduleNextRetry(now, nextAttemptAt, nextCount, trans.reason());
                     delivery.recordTransientFailure(trans.reason(), now);
+                    metrics.recordDispatched(delivery.getChannel(), notification.type(), "FAILED_TRANSIENT");
                 }
             }
         }
@@ -137,5 +148,16 @@ public class DeliveryRelayService {
         if (cause instanceof IllegalArgumentException)
             return new DispatchResult.PermanentFailure("invalid input", cause);
         return new DispatchResult.TransientFailure("unclassified runtime error", cause);
+    }
+
+    private void finalizeFailure(DeliveryAttempt attempt, Delivery delivery, String reason, Instant now) {
+        DeliveryAttemptSessionCount finalCount = attempt.getAttemptCount().increment();
+        attempt.markFailed(finalCount, reason, now);
+        if (delivery.getChannel() == com.livenotification.delivery.domain.ChannelType.EMAIL) {
+            delivery.markDead(reason, now);
+            return;
+        }
+        log.error("design violation attempt terminated for non-email delivery, deliveryId={}, channel={}",
+            delivery.getId().value(), delivery.getChannel());
     }
 }

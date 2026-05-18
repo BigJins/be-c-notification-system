@@ -1,11 +1,11 @@
 package com.livenotification.delivery.adapter.out.channel;
 
+import com.livenotification.delivery.application.metrics.DeliveryMetrics;
 import com.livenotification.delivery.application.port.ChannelAdapter;
 import com.livenotification.delivery.domain.ChannelType;
 import com.livenotification.delivery.domain.Delivery;
 import com.livenotification.delivery.domain.DispatchResult;
 import com.livenotification.notification.application.NotificationView;
-import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component;
  * the design has been violated. Contract preserves DispatchResult while signaling:
  * - notification.design.violation counter +1 (kind=inapp_dispatch_attempted)
  * - log.error
- * - PermanentFailure return (this attempt becomes DEAD)
+ * - PermanentFailure return (the corrupt attempt is terminated as FAILED while delivery stays SENT)
  *
  * Task 26 will replace direct MeterRegistry use with DeliveryMetrics.recordDesignViolation(...).
  */
@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
 @Slf4j
 public class InAppAdapter implements ChannelAdapter {
 
-    private final MeterRegistry registry;
+    private final DeliveryMetrics metrics;
 
     @Override
     public ChannelType type() {
@@ -33,8 +33,7 @@ public class InAppAdapter implements ChannelAdapter {
 
     @Override
     public DispatchResult send(NotificationView notification, Delivery delivery) {
-        registry.counter("notification.design.violation",
-            "kind", "inapp_dispatch_attempted").increment();
+        metrics.recordDesignViolation("inapp_dispatch_attempted");
 
         IllegalStateException violation = new IllegalStateException(
             "InAppAdapter.send invoked for delivery=" + delivery.getId().value()

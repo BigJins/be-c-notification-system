@@ -1,6 +1,7 @@
 package com.livenotification.delivery.adapter.out.channel;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.livenotification.delivery.application.metrics.DeliveryMetrics;
 import com.livenotification.delivery.domain.ChannelType;
 import com.livenotification.delivery.domain.Delivery;
 import com.livenotification.delivery.domain.DispatchResult;
@@ -23,7 +24,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class InAppAdapterTest {
 
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
-    private final InAppAdapter adapter = new InAppAdapter(registry);
+    private final DeliveryMetrics metrics = new DeliveryMetrics(registry);
+    private final InAppAdapter adapter = new InAppAdapter(metrics);
     private final ObjectMapper mapper = new ObjectMapper();
     private final Clock clock = Clock.fixed(Instant.parse("2026-05-18T12:00:00Z"), ZoneOffset.UTC);
 
