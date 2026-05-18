@@ -1,0 +1,51 @@
+spring:
+  application: { name: notification }
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:notification}
+    username: ${DB_USER:notification}
+    password: ${DB_PASSWORD:notification}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 5000
+  jpa:
+    open-in-view: false
+    hibernate: { ddl-auto: validate }
+    properties:
+      hibernate.jdbc.lock.timeout: 1000
+      hibernate.jdbc.batch_size: 50
+      hibernate.order_inserts: true
+      hibernate.order_updates: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+
+server: { port: 8080, shutdown: graceful }
+
+management:
+  endpoints.web.exposure.include: health,info,metrics,prometheus
+  prometheus.metrics.export.enabled: true
+
+springdoc:
+  api-docs.path: /v3/api-docs
+  swagger-ui.path: /swagger-ui.html
+
+notification:
+  retry:
+    base-delay: 30s
+    max-attempts: 5
+    jitter-fraction: 1.0
+  worker:
+    poll-interval: 1s
+    batch-size: 50
+    semaphore-permits: 16
+    claim-lease: 30s
+    reaper-interval: 30s
+    dispatch-timeout: 5s
+  admin:
+    token: ${ADMIN_TOKEN:dev-token-do-not-use-in-prod}
+  cleanup:
+    delivery-attempt-retention: P30D
+    idempotency-retention: PT24H
