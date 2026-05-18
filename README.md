@@ -93,7 +93,28 @@ return jdbcTemplate.query("""
 
 ### 5.2 channel = transport (Path B)
 
-<!-- TBD: Task 28 — Notification = 논리적 사건, Delivery = 채널별 전달 의도, channel 은 notification identity 가 아닌 delivery 의 컬럼. v3.3 channel-as-identity 와의 설계 tradeoff 비교. -->
+#### v3.3 → v3.4 reshape
+
+본 시스템의 설계는 두 번의 큰 reshape 를 거쳤다.
+
+| 버전 | frame | 한계 |
+|---|---|---|
+| v3.3 | channel = notification identity. `Notification` 안에 채널 정보 포함, 채널 별로 별 entity. | fan-out 시나리오 / multi-channel notification 표현이 부자연. read_at 의 owner 가 모호 (어느 channel 의 read?) |
+| v3.4 (현재) | channel = transport. `Notification` = 논리적 사건 (1 row), `Delivery` = 채널별 전달 (N row, channel 별), `DeliveryAttempt` = retry 큐. | (Path C 에서 더 확장 가능) |
+
+#### 4가지 정당화
+
+1. **read_at 의 owner 가 명확해짐** — `Notification.read_at` 은 *사용자가 알림 자체를 읽었는가* 의 단일 boolean. 채널 별 read 추적은 IN_APP delivery 의 SENT 상태로 derive (invariant #2: read_at NOT NULL 가능은 IN_APP SENT 일 때만).
+2. **dedup signature 가 단순** — 1차 dedup = `(event_id, recipient_id, type)` 만, channel 무관. fan-out 시에도 같은 event 는 한 번만 등록.
+3. **fan-out 모델링 자연스러움** — `channels: ["EMAIL", "IN_APP"]` 요청 = notification 1 + delivery 2. 각 delivery 의 state machine 독립.
+4. **Path C 자연 확장** — channel 추가 (SMS, push) 가 entity 변경 0, application service 변경 0. DB schema 변경만 (CHECK constraint 의 enum 확장).
+
+#### 트레이드오프 정직 표기
+
+- **read_at 의 cross-AR 검증** — `NotificationService.markRead` 가 `deliveryRepository.existsByNotificationIdAndChannelAndState(id, IN_APP, SENT)` 를 호출. Notification 과 Delivery 가 별 AR 이므로 entity 안에서 검증 X. 검증 책임은 application service.
+- **`X-Event-Duplicate` 와 idempotency replay 의 관계** — replay 경로에서도 `eventDuplicate=true` 를 노출 (5.1 헤더 독립성 표 참조). short-circuit 가 아닌 *factual* 응답.
+
+[원본 grill 이력]: `C:\Users\kim\.gstack\projects\assignment\kim-main-design-20260516-210124.md` (v3.4 Path B)
 
 ### 5.3 동시성 3중 방어
 
@@ -173,7 +194,33 @@ prod 15분 retry cycle 이 test ~1.5s 안에 완료.
 
 ## 8. Path C 확장 sketch
 
-<!-- TBD: Task 28 — 미구현 항목 10개 표 (EmailBatch/digest, RecipientPreference, Bounce webhook, Real SMTP/SES, Template engine 등) + production 전환 sketch. design §8 "Path C sketch" 기반. -->
+본 과제는 4시간~12시간 마감 / 5조건 충족 / 정직한 미구현 표기 가 목표 (CEO plan). 아래 12 항목은 *production deployment 시 추가될 layer*. **현재 미구현, 본 README 의 의도된 명시**.
+
+| # | 항목 | 이유 (왜 현 단계 미구현) | 확장 hook |
+|---|---|---|---|
+| 1 | EmailBatch (~30s 윈도우) | 본 과제는 1 notification = N delivery (즉시). batch 는 외부 SMTP rate-limit 보호 목적. | `delivery.batch_id` 컬럼 추가 + `DispatchWorker` 가 `GROUP BY batch_id` |
+| 2 | RecipientPreference (선호 채널) | admin UI 가 본 과제 scope 외. | `recipient_preference` 테이블 + `NotificationService.register` 에서 channels 필터 |
+| 3 | Bounce webhook (SMTP → auto-DEAD) | mock EmailAdapter 만 구현. 실제 SMTP 통합이 없음. | `/v1/webhooks/email/bounce` endpoint + delivery.markDead |
+| 4 | Real SMTP (JavaMailSender) | mock 모드로 충분 (`x_test_failure` injection). | `EmailAdapter.send` 안 JavaMailSender 주입 |
+| 5 | Template engine | payload freeform JSONB 로 충분. Mustache/Freemarker + locale hook 미적용. | EmailAdapter 안 template engine 호출 |
+| 6 | OTel tracing | Micrometer + Prometheus 만. OTel exporter 미적용. | `micrometer-tracing-bridge-otel` 의존성 + tracer bean |
+| 7 | Real broker (Kafka) | DB polling 으로 충분 (~50 RPS 기준). | DispatchWorker 의 `claimBatch` → `KafkaListener` 로 swap. delivery_attempt 가 곧 topic message. |
+| 8 | Scheduled delivery | 즉시 발송만 지원. `next_attempt_at` 컬럼 재사용으로 확장 가능. | API 의 `scheduledAt` 필드 + delivery.create 시 next_attempt_at=scheduledAt |
+| 9 | Multi-device read sync | `notification.read_at` 단일 컬럼만. 디바이스 별 read 추적 미적용. | `notification_read_per_device(notification_id, device_id, read_at)` 테이블 |
+| 10 | OAuth2 admin auth | X-Admin-Token (timing-safe compare) 으로 충분. OAuth2 Resource Server 미적용. | `spring-boot-starter-oauth2-resource-server` + JwtDecoder bean |
+| 11 | NotificationCleanupWorker + DeliveryCleanupWorker (6개월 retention) | 본 과제는 delivery_attempt (30일) + idempotency (24h) cleanup 만 구현. 6개월 retention worker 미구현. | `@Scheduled` 일 1회 + `repository.deleteExpired`. FK ON DELETE CASCADE 로 notification 삭제 시 delivery + delivery_attempt 모두 cascade 삭제. |
+| 12 | UUIDv7 (time-ordered ID) | `UUID.randomUUID()` (v4) — production 대량 트래픽 시 B-tree page split 비용. 본 과제 볼륨 (100K/일, ~1.2 RPS 평균) 에서 이득 거의 0. JDK 21 native impl 없음. | `com.github.f4b6a3:uuid-creator` lib + entity factory 의 `UUID.randomUUID()` 호출만 교체 |
+
+#### 우선순위 (production readiness)
+
+- **즉시 추가 (alert blocker)**: #3 Bounce webhook, #6 OTel tracing
+- **24~48h 작업**: #1 EmailBatch, #4 Real SMTP, #10 OAuth2
+- **장기 (broker 전환)**: #7 Real broker
+- **튜닝성**: #11 Cleanup worker (6개월 retention), #12 UUIDv7
+
+#### "설계는 깊게, 설명은 정직하게" 시그너처
+
+본 과제의 *명시적* 미구현 정책 — CEO plan 의 결정. 미구현 항목을 *발견되지 않은 채로* 두는 것 보다 *명시 + 이유 + 확장 hook* 로 표기. 인터뷰어가 *시스템 설계 사고* 를 평가할 수 있도록.
 
 ---
 
