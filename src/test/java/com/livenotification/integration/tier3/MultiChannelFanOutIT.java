@@ -44,6 +44,18 @@ class MultiChannelFanOutIT extends AbstractIntegrationTest {
             HttpMethod.POST, new HttpEntity<>(body, h), Map.class);
         assertThat(res.getStatusCode().value()).isEqualTo(202);
         UUID id = UUID.fromString((String) res.getBody().get("id"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> responseDeliveries = (List<Map<String, Object>>) res.getBody().get("deliveries");
+        assertThat(responseDeliveries).hasSize(2);
+        assertThat(responseDeliveries)
+            .anySatisfy(d -> {
+                assertThat(d.get("channel")).isEqualTo("IN_APP");
+                assertThat(d.get("state")).isEqualTo("SENT");
+            })
+            .anySatisfy(d -> {
+                assertThat(d.get("channel")).isEqualTo("EMAIL");
+                assertThat(d.get("state")).isEqualTo("PENDING");
+            });
 
         // Exactly 1 notification row
         Integer notifCount = jdbcTemplate.queryForObject(

@@ -1,6 +1,7 @@
 package com.livenotification.notification.domain;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
@@ -32,6 +33,18 @@ class NotificationInvariantTest {
         // payload() returns VO wrapper (not direct mutable JsonNode access)
         Method payloadMethod = Notification.class.getMethod("payload");
         assertThat(payloadMethod.getReturnType()).isEqualTo(NotificationPayload.class);
+
+        ObjectNode source = new ObjectMapper().createObjectNode().put("course", "A");
+        var immutable = Notification.create(
+            new EventId("e1-copy"), new RecipientId("u1-copy"), NotificationType.PAYMENT_CONFIRMED,
+            new NotificationPayload(source), fixedClock);
+
+        source.put("course", "mutated");
+        assertThat(immutable.payload().value().get("course").asText()).isEqualTo("A");
+
+        ObjectNode leaked = (ObjectNode) immutable.payload().value();
+        leaked.put("course", "changed-again");
+        assertThat(immutable.payload().value().get("course").asText()).isEqualTo("A");
     }
 
     @Test

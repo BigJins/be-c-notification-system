@@ -27,7 +27,7 @@ public class AdminRetryService {
     @Transactional
     public void retry(NotificationId notificationId) {
         List<Delivery> dead = deliveryRepository
-            .findAllByNotificationIdAndState(notificationId.value(), DeliveryState.DEAD);
+            .findAllByNotificationIdAndStateForUpdate(notificationId.value(), DeliveryState.DEAD);
         if (dead.isEmpty()) {
             throw new NoRetriableDeliveryException("no DEAD delivery for " + notificationId.value());
         }

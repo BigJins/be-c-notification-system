@@ -4,3 +4,9 @@ build/
 *.iml
 .DS_Store
 .testcontainers.properties
+
+# local Claude Code settings (machine-specific, do not publish)
+.claude/
+
+# personal planning history (gstack brainstorm / plan artefacts)
+docs/superpowers/

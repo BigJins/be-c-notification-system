@@ -1,7 +1,16 @@
 package com.livenotification.notification.domain;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.NoResultException;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
+import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import lombok.AccessLevel;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -15,66 +24,86 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
-@Entity @Table(name = "notification")
+@Entity
+@Table(name = "notification")
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Getter
 @EqualsAndHashCode(of = "id")
 @ToString(of = {"id", "eventId", "recipientId", "type"})
 public class Notification {
+
     @Id
-    @Convert(converter = NotificationIdConverter.class)
     @JdbcTypeCode(SqlTypes.UUID)
-    private NotificationId id;
+    @Getter(AccessLevel.NONE)
+    private UUID id;
 
-    @Convert(converter = EventIdConverter.class)
-    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "event_id", updatable = false, nullable = false)
-    private EventId eventId;
+    @Getter(AccessLevel.NONE)
+    private String eventId;
 
-    @Convert(converter = RecipientIdConverter.class)
-    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "recipient_id", updatable = false, nullable = false)
-    private RecipientId recipientId;
+    @Getter(AccessLevel.NONE)
+    private String recipientId;
 
-    @Enumerated(EnumType.STRING) @Column(updatable = false, nullable = false) private NotificationType type;
+    @Enumerated(EnumType.STRING)
+    @Column(updatable = false, nullable = false)
+    private NotificationType type;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "payload", columnDefinition = "jsonb", updatable = false, nullable = false)
-    @Getter(AccessLevel.NONE)   // raw JsonNode getter hidden — VO accessor only
+    @Getter(AccessLevel.NONE)
     private JsonNode payload;
 
-    @Column(name = "read_at") private Instant readAt;
-    @Column(name = "created_at", updatable = false, nullable = false) private Instant createdAt;
-    @Column(name = "updated_at", nullable = false) private Instant updatedAt;
+    @Column(name = "read_at")
+    private Instant readAt;
 
-    /** Registration entry. Clock injected — application service passes it in. */
+    @Column(name = "created_at", updatable = false, nullable = false)
+    private Instant createdAt;
+
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
+
+    public NotificationId getId() {
+        return new NotificationId(id);
+    }
+
+    public EventId getEventId() {
+        return new EventId(eventId);
+    }
+
+    public RecipientId getRecipientId() {
+        return new RecipientId(recipientId);
+    }
+
     public static Notification create(EventId eventId, RecipientId recipientId,
-                                       NotificationType type, NotificationPayload payload,
-                                       Clock clock) {
+                                      NotificationType type, NotificationPayload payload,
+                                      Clock clock) {
         Objects.requireNonNull(eventId, "eventId");
         Objects.requireNonNull(recipientId, "recipientId");
         Objects.requireNonNull(type, "type");
         Objects.requireNonNull(payload, "payload");
+
         Instant now = clock.instant();
-        Notification n = new Notification();
-        n.id = new NotificationId(UUID.randomUUID());
-        n.eventId = eventId; n.recipientId = recipientId; n.type = type;
-        n.payload = payload.value();
-        n.createdAt = now; n.updatedAt = now;
-        return n;
+        Notification notification = new Notification();
+        notification.id = UUID.randomUUID();
+        notification.eventId = eventId.value();
+        notification.recipientId = recipientId.value();
+        notification.type = type;
+        notification.payload = payload.value();
+        notification.createdAt = now;
+        notification.updatedAt = now;
+        return notification;
     }
 
-    /**
-     * Simple state mutator. *Invariant #2 enforcement is application service's responsibility*:
-     * NotificationService.markRead calls deliveryRepository.existsByNotificationIdAndChannelAndState(
-     *   id, IN_APP, SENT) → false → throw ReadStateViolationException(422). entity doesn't cross-AR query.
-     */
     public void markRead(Instant now) {
-        if (this.readAt != null) return;   // idempotent
+        if (this.readAt != null) {
+            return;
+        }
         this.readAt = now;
         this.updatedAt = now;
     }
 
-    /** VO wrapper accessor. */
-    public NotificationPayload payload() { return new NotificationPayload(this.payload); }
+    public NotificationPayload payload() {
+        return new NotificationPayload(this.payload);
+    }
 }

@@ -1,74 +1,70 @@
 package com.livenotification.integration.recovery;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.livenotification.delivery.domain.ChannelType;
+import com.livenotification.delivery.adapter.in.scheduler.DispatchWorker;
 import com.livenotification.integration.support.AbstractIntegrationTest;
-import com.livenotification.integration.support.TestNotificationFixtures;
-import com.livenotification.notification.domain.NotificationType;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.web.client.TestRestTemplate;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
 
-import java.util.List;
+import java.sql.Timestamp;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * DB-state durability test (replaces Spring-context-restart which is impractical in unit tests).
- *
- * Semantic: JdbcTemplate bypasses the Hibernate persistence context entirely.
- * If the application process were restarted, the same raw SQL queries would
- * still return the same rows — proving the state is fully on-disk, not in an
- * in-memory cache.
+ * Persisted queue durability test.
+ * A READY delivery_attempt inserted directly into Postgres must be picked up by
+ * the worker on a later tick, proving dispatch resumes from persisted DB state.
  */
 class DurabilityIT extends AbstractIntegrationTest {
 
-    @Autowired TestRestTemplate restTemplate;
-    @Autowired ObjectMapper objectMapper;
+    @Autowired DispatchWorker dispatchWorker;
 
     @Test
-    void registeredNotification_isDurableInDb() throws Exception {
-        String body = objectMapper.writeValueAsString(TestNotificationFixtures.registerBody(
-            "dur-e1", "u-dur", NotificationType.PAYMENT_CONFIRMED,
-            List.of(ChannelType.EMAIL),
-            TestNotificationFixtures.payloadNormal(objectMapper)));
+    void persistedReadyAttempt_isDispatchedOnLaterWorkerTick() {
+        UUID notificationId = UUID.randomUUID();
+        UUID deliveryId = UUID.randomUUID();
+        UUID attemptId = UUID.randomUUID();
+        Instant now = Instant.now();
+        Instant due = now.minusSeconds(5);
 
-        HttpHeaders h = new HttpHeaders();
-        h.setContentType(MediaType.APPLICATION_JSON);
-        var res = restTemplate.exchange(
-            baseUrl() + "/v1/notifications",
-            HttpMethod.POST,
-            new HttpEntity<>(body, h),
-            Map.class);
+        jdbcTemplate.update("""
+            INSERT INTO notification (id, event_id, recipient_id, type, payload, created_at, updated_at)
+            VALUES (?, 'dur-e1', 'u-dur', 'PAYMENT_CONFIRMED',
+                    '{"subject":"resume","body":"from-db"}'::jsonb, ?, ?)
+            """, notificationId, Timestamp.from(now), Timestamp.from(now));
 
-        assertThat(res.getStatusCode().value()).isEqualTo(202);
-        UUID notificationId = UUID.fromString((String) res.getBody().get("id"));
+        jdbcTemplate.update("""
+            INSERT INTO delivery (id, notification_id, channel, state, attempt_count, created_at, updated_at)
+            VALUES (?, ?, 'EMAIL', 'PENDING', 0, ?, ?)
+            """, deliveryId, notificationId, Timestamp.from(now), Timestamp.from(now));
 
-        // JdbcTemplate bypasses Hibernate persistence context — proves DB-state durability.
-        // If the worker / app process were restarted, these same SQL queries would still
-        // return the rows, confirming that state is fully committed to Postgres.
-        Integer notifCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM notification WHERE id = ?",
-            Integer.class, notificationId);
+        jdbcTemplate.update("""
+            INSERT INTO delivery_attempt (id, delivery_id, state, attempt_count, next_attempt_at, created_at, updated_at)
+            VALUES (?, ?, 'READY', 0, ?, ?, ?)
+            """, attemptId, deliveryId, Timestamp.from(due), Timestamp.from(now), Timestamp.from(now));
 
-        Integer deliveryCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM delivery WHERE notification_id = ?",
-            Integer.class, notificationId);
+        dispatchWorker.tick();
 
-        Integer attemptCount = jdbcTemplate.queryForObject("""
-            SELECT COUNT(*) FROM delivery_attempt da
-            JOIN delivery d ON d.id = da.delivery_id
-            WHERE d.notification_id = ?
-            """, Integer.class, notificationId);
+        Awaitility.await()
+            .atMost(Duration.ofSeconds(3))
+            .pollInterval(Duration.ofMillis(150))
+            .untilAsserted(() -> {
+                Map<String, Object> delivery = jdbcTemplate.queryForMap(
+                    "SELECT state, attempt_count, sent_at FROM delivery WHERE id = ?",
+                    deliveryId);
+                assertThat(delivery.get("state")).isEqualTo("SENT");
+                assertThat(((Number) delivery.get("attempt_count")).intValue()).isEqualTo(1);
+                assertThat(delivery.get("sent_at")).isNotNull();
 
-        assertThat(notifCount).isEqualTo(1);
-        assertThat(deliveryCount).isEqualTo(1);
-        assertThat(attemptCount).isEqualTo(1);
+                Map<String, Object> attempt = jdbcTemplate.queryForMap(
+                    "SELECT state, attempt_count FROM delivery_attempt WHERE id = ?",
+                    attemptId);
+                assertThat(attempt.get("state")).isEqualTo("DONE");
+                assertThat(((Number) attempt.get("attempt_count")).intValue()).isEqualTo(1);
+            });
     }
 }

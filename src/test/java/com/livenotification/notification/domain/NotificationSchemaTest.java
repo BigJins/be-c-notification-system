@@ -40,6 +40,15 @@ class NotificationSchemaTest {
         Flyway.configure()
             .dataSource(ds)
             .locations("classpath:db/migration")
+            .cleanDisabled(false)
+            .baselineOnMigrate(true)
+            .load()
+            .clean();
+
+        Flyway.configure()
+            .dataSource(ds)
+            .locations("classpath:db/migration")
+            .cleanDisabled(false)
             .baselineOnMigrate(true)
             .load()
             .migrate();

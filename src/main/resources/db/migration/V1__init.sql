@@ -54,7 +54,11 @@ CREATE TABLE delivery (
     CONSTRAINT uq_delivery_per_channel           UNIQUE (notification_id, channel),
     CONSTRAINT ck_delivery_channel               CHECK (channel IN ('EMAIL', 'IN_APP')),
     CONSTRAINT ck_delivery_state                 CHECK (state IN ('PENDING', 'SENT', 'DEAD')),
-    CONSTRAINT ck_delivery_attempt_count_nonneg  CHECK (attempt_count >= 0)
+    CONSTRAINT ck_delivery_attempt_count_nonneg  CHECK (attempt_count >= 0),
+    CONSTRAINT ck_delivery_sent_at_state_sync    CHECK (
+        (state = 'SENT' AND sent_at IS NOT NULL) OR
+        (state IN ('PENDING', 'DEAD') AND sent_at IS NULL)
+    )
 );
 
 COMMENT ON TABLE delivery IS 'Per-channel delivery record; channel is transport identity, not notification identity (1.5차 dedup anchor)';

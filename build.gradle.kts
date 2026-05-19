@@ -56,4 +56,11 @@ dependencyManagement {
 tasks.named<Test>("test") {
     useJUnitPlatform()
     systemProperty("testcontainers.reuse.enable", "true")
+    // On Windows with Docker Desktop 4.60 (min API 1.44), use docker_engine_linux pipe.
+    // dockerDesktopLinuxEngine and docker_engine stubs return 400 during TC version negotiation.
+    environment("DOCKER_HOST", "npipe:////./pipe/docker_engine_linux")
+    systemProperty("DOCKER_HOST", "npipe:////./pipe/docker_engine_linux")
+    // docker-java reads "api.version" system property to override the negotiation start version.
+    // Docker Desktop 4.60 requires minimum 1.44; without this the shaded docker-java defaults to 1.32.
+    systemProperty("api.version", "1.44")
 }

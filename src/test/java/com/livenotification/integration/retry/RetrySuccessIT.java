@@ -42,10 +42,20 @@ class RetrySuccessIT extends AbstractIntegrationTest {
 
         Awaitility.await().atMost(Duration.ofSeconds(3))
             .untilAsserted(() -> {
-                String state = jdbcTemplate.queryForObject(
-                    "SELECT state FROM delivery WHERE notification_id = ? AND channel = 'EMAIL'",
-                    String.class, notificationId);
-                assertThat(state).isEqualTo("SENT");
+                Map<String, Object> delivery = jdbcTemplate.queryForMap(
+                    "SELECT state, attempt_count FROM delivery WHERE notification_id = ? AND channel = 'EMAIL'",
+                    notificationId);
+                assertThat(delivery.get("state")).isEqualTo("SENT");
+                assertThat(((Number) delivery.get("attempt_count")).intValue()).isEqualTo(1);
+
+                Map<String, Object> attempt = jdbcTemplate.queryForMap("""
+                    SELECT da.state, da.attempt_count
+                    FROM delivery_attempt da
+                    JOIN delivery d ON d.id = da.delivery_id
+                    WHERE d.notification_id = ? AND d.channel = 'EMAIL'
+                    """, notificationId);
+                assertThat(attempt.get("state")).isEqualTo("DONE");
+                assertThat(((Number) attempt.get("attempt_count")).intValue()).isEqualTo(1);
             });
     }
 }

@@ -1,5 +1,6 @@
 package com.livenotification.delivery.adapter.out.channel;
 
+import com.livenotification.delivery.application.port.ChannelAdapterRouter;
 import com.livenotification.delivery.application.port.ChannelAdapter;
 import com.livenotification.delivery.domain.ChannelType;
 import jakarta.annotation.PostConstruct;
@@ -13,7 +14,7 @@ import java.util.stream.Collectors;
 
 @Component
 @RequiredArgsConstructor
-public class ChannelRouter {
+public class ChannelRouter implements ChannelAdapterRouter {
 
     private final List<ChannelAdapter> adapters;
     private Map<ChannelType, ChannelAdapter> byType;
@@ -24,6 +25,7 @@ public class ChannelRouter {
             .collect(Collectors.toMap(ChannelAdapter::type, Function.identity()));
     }
 
+    @Override
     public ChannelAdapter route(ChannelType type) {
         ChannelAdapter adapter = byType.get(type);
         if (adapter == null) {

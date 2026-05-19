@@ -29,16 +29,17 @@ class DeliveryAttemptInvariantTest {
         assertThat(attempt.getClaimedBy()).isEqualTo("worker-1");
         assertThat(attempt.getClaimedUntil()).isEqualTo(now.plusSeconds(30));
 
-        attempt.markDone(now);
+        attempt.markDone(new DeliveryAttemptSessionCount(1), now);
         assertThat(attempt.getState()).isEqualTo(DeliveryAttemptState.DONE);
+        assertThat(attempt.getAttemptCount().value()).isEqualTo(1);
 
         // Illegal transition: DONE → markDone (already done) must throw
-        assertThatThrownBy(() -> attempt.markDone(now))
+        assertThatThrownBy(() -> attempt.markDone(new DeliveryAttemptSessionCount(2), now))
             .isInstanceOf(IllegalStateException.class);
 
         // Illegal transition: READY → markDone (skipping IN_PROGRESS) must throw
         DeliveryAttempt ready2 = DeliveryAttempt.readyFor(deliveryId, fixedClock);
-        assertThatThrownBy(() -> ready2.markDone(now))
+        assertThatThrownBy(() -> ready2.markDone(new DeliveryAttemptSessionCount(1), now))
             .isInstanceOf(IllegalStateException.class);
     }
 
@@ -63,6 +64,11 @@ class DeliveryAttemptInvariantTest {
         // Ensure count can never go negative (VO guard)
         assertThatThrownBy(() -> new DeliveryAttemptSessionCount(-1))
             .isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> new DeliveryAttemptSessionCount(4).requireAtMost(3))
+            .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(new DeliveryAttemptSessionCount(2).incrementUntil(3).value()).isEqualTo(3);
     }
 
     @Test
@@ -80,7 +86,7 @@ class DeliveryAttemptInvariantTest {
         assertThat(attempt.getClaimedBy()).isNotNull();
         assertThat(attempt.getClaimedUntil()).isNotNull();
 
-        attempt.markDone(now);
+        attempt.markDone(new DeliveryAttemptSessionCount(1), now);
         assertThat(attempt.getClaimedBy()).isNull();
         assertThat(attempt.getClaimedUntil()).isNull();
 

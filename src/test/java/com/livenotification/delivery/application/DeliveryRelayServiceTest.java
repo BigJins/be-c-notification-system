@@ -1,8 +1,8 @@
 package com.livenotification.delivery.application;
 
-import com.livenotification.delivery.adapter.out.channel.ChannelRouter;
 import com.livenotification.delivery.application.metrics.DeliveryMetrics;
 import com.livenotification.delivery.adapter.out.channel.InAppAdapter;
+import com.livenotification.delivery.application.port.ChannelAdapterRouter;
 import com.livenotification.delivery.domain.ChannelType;
 import com.livenotification.delivery.domain.Delivery;
 import com.livenotification.delivery.domain.DeliveryAttempt;
@@ -44,7 +44,7 @@ class DeliveryRelayServiceTest {
     void relay_corruptInAppAttempt_terminatesAttemptWithoutChangingDelivery() throws Exception {
         DeliveryRepository deliveryRepository = mock(DeliveryRepository.class);
         DeliveryAttemptRepository attemptRepository = mock(DeliveryAttemptRepository.class);
-        ChannelRouter channelRouter = mock(ChannelRouter.class);
+        ChannelAdapterRouter channelRouter = mock(ChannelAdapterRouter.class);
         NotificationLookup notificationLookup = mock(NotificationLookup.class);
         RetryPolicy retryPolicy = new RetryPolicy(Duration.ofMillis(100), 3, 0.0);
         NotificationProperties properties = properties();

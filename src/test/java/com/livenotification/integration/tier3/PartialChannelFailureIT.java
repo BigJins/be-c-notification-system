@@ -68,6 +68,23 @@ class PartialChannelFailureIT extends AbstractIntegrationTest {
                     .isEqualTo("DEAD");
             });
 
+        @SuppressWarnings("unchecked")
+        Map<String, Object> detail = restTemplate.exchange(
+            baseUrl() + "/v1/notifications/" + id,
+            HttpMethod.GET, HttpEntity.EMPTY, Map.class).getBody();
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> deliveries = (List<Map<String, Object>>) detail.get("deliveries");
+        assertThat(deliveries).hasSize(2);
+        assertThat(deliveries)
+            .anySatisfy(d -> {
+                assertThat(d.get("channel")).isEqualTo("IN_APP");
+                assertThat(d.get("state")).isEqualTo("SENT");
+            })
+            .anySatisfy(d -> {
+                assertThat(d.get("channel")).isEqualTo("EMAIL");
+                assertThat(d.get("state")).isEqualTo("DEAD");
+            });
+
         // Confirm IN_APP is still SENT (not affected by EMAIL going DEAD)
         String inAppStateFinal = jdbcTemplate.queryForObject(
             "SELECT state FROM delivery WHERE notification_id = ? AND channel = 'IN_APP'",

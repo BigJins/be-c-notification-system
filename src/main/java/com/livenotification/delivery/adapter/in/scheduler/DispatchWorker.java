@@ -27,8 +27,13 @@ public class DispatchWorker {
     @Scheduled(fixedDelayString = "${notification.worker.poll-interval}")
     public void tick() {
         try {
+            int availablePermits = semaphore.availablePermits();
+            if (availablePermits <= 0) {
+                log.debug("dispatch tick skipped - no semaphore permits available");
+                return;
+            }
             List<DeliveryAttemptId> claimed = relayService.claimBatch(
-                properties.worker().batchSize(),
+                Math.min(properties.worker().batchSize(), availablePermits),
                 workerId(),
                 properties.worker().claimLease());
             for (DeliveryAttemptId id : claimed) {

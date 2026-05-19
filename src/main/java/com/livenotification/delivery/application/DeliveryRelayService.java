@@ -1,8 +1,8 @@
 package com.livenotification.delivery.application;
 
-import com.livenotification.delivery.adapter.out.channel.ChannelRouter;
 import com.livenotification.delivery.application.metrics.DeliveryMetrics;
 import com.livenotification.delivery.application.port.ChannelAdapter;
+import com.livenotification.delivery.application.port.ChannelAdapterRouter;
 import com.livenotification.delivery.domain.Delivery;
 import com.livenotification.delivery.domain.DeliveryAttempt;
 import com.livenotification.delivery.domain.DeliveryAttemptId;
@@ -38,7 +38,7 @@ public class DeliveryRelayService {
 
     private final DeliveryRepository deliveryRepository;
     private final DeliveryAttemptRepository attemptRepository;
-    private final ChannelRouter channelRouter;
+    private final ChannelAdapterRouter channelRouter;
     private final NotificationLookup notificationLookup;
     private final RetryPolicy retryPolicy;
     private final NotificationProperties properties;
