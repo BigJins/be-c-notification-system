@@ -113,7 +113,8 @@ class NotificationFlowIT extends AbstractIntegrationTest {
         var res4 = restTemplate.exchange(baseUrl() + "/v1/notifications",
             HttpMethod.POST, new HttpEntity<>(body3, ih), Map.class);
         assertThat(res4.getStatusCode().value()).isEqualTo(200);
-        assertThat(res4.getHeaders().getFirst("X-Event-Duplicate")).isEqualTo("true");
+        // ADR-0002: replay supersedes event-dup — X-Event-Duplicate suppressed when replay=true.
+        assertThat(res4.getHeaders().getFirst("X-Event-Duplicate")).isEqualTo("false");
         assertThat(res4.getHeaders().getFirst("X-Idempotent-Replay")).isEqualTo("true");
     }
 }

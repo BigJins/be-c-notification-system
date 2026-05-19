@@ -43,16 +43,34 @@ public class NotificationService {
     private final Clock clock;
     private final DeliveryMetrics metrics;
 
+    /**
+     * Three-phase registration. See {@link RegisterOutcome} for the result shape and
+     * {@code IdempotencyService} class javadoc for the gate/bind contract.
+     *
+     * <pre>
+     *   phase 1 — gate:   idempotencyService.checkOutcome(K, H)
+     *                       HitSameHash → return IdempotentReplay (early)
+     *                       HitDifferentHash → throw 409
+     *                       Miss → fall through
+     *   phase 2 — work:   notificationRegistrationStore.insertOrLoad(cmd)
+     *                     if newly inserted: deliveryRegistrar.scheduleFor(...)
+     *   phase 3 — bind:   idempotencyService.bind(K, H, notification.id, ttl)   [if K present]
+     * </pre>
+     *
+     * The bind call is hoisted above the inserted/!inserted branch — both paths bind
+     * identically. Phase 1 and phase 3 cannot be folded because phase 2 produces the
+     * {@code targetId} that phase 3 needs.
+     */
     @Transactional
-    public RegisterResult register(RegisterCommand cmd, IdempotencyKey headerKey) {
+    public RegisterOutcome register(RegisterCommand cmd, IdempotencyKey headerKey) {
         RequestHash hash = null;
         if (headerKey != null) {
             hash = RequestHash.of(cmd, objectMapper);
-            var result = idempotencyService.lookupCurrent(headerKey, hash);
-            switch (result) {
+            IdempotencyResult gate = idempotencyService.checkOutcome(headerKey, hash);
+            switch (gate) {
                 case IdempotencyResult.HitSameHash hit -> {
                     metrics.recordIdempotencyReplay();
-                    return loadReplay(new NotificationId(hit.targetId()), true);
+                    return new RegisterOutcome.IdempotentReplay(loadDetail(new NotificationId(hit.targetId())));
                 }
                 case IdempotencyResult.HitDifferentHash ignored ->
                     throw new IdempotencyConflictException("Idempotency-Key reused with different body");
@@ -64,39 +82,26 @@ public class NotificationService {
         NotificationInsertResult insertResult = notificationRegistrationStore.insertOrLoad(cmd);
         Notification notification = insertResult.notification();
 
-        if (!insertResult.inserted()) {
-            if (headerKey != null && hash != null) {
-                idempotencyService.persistIfAbsent(
-                    headerKey,
-                    hash,
-                    notification.getId().value(),
-                    properties.cleanup().idempotencyRetention());
-            }
-
-            List<Delivery> existingDeliveries = deliveryRepository.findAllByNotificationId(notification.getId());
-            return new RegisterResult(new NotificationDetail(notification, existingDeliveries), true, false);
+        if (insertResult.inserted()) {
+            metrics.recordRegistered(cmd.type());
+            deliveryRegistrar.scheduleFor(notification.getId(), cmd.channels());
         }
 
-        metrics.recordRegistered(cmd.type());
-        deliveryRegistrar.scheduleFor(notification.getId(), cmd.channels());
-
-        if (headerKey != null && hash != null) {
-            idempotencyService.persistIfAbsent(
+        if (headerKey != null) {
+            idempotencyService.bind(
                 headerKey,
                 hash,
                 notification.getId().value(),
                 properties.cleanup().idempotencyRetention());
         }
 
-        List<Delivery> deliveries = deliveryRepository.findAllByNotificationId(notification.getId());
-        return new RegisterResult(new NotificationDetail(notification, deliveries), false, false);
-    }
+        NotificationDetail detail = new NotificationDetail(
+            notification,
+            deliveryRepository.findAllByNotificationId(notification.getId()));
 
-    private RegisterResult loadReplay(NotificationId id, boolean eventDuplicate) {
-        Notification notification = notificationRepository.findById(id)
-            .orElseThrow(() -> new IllegalStateException("idempotency target missing: " + id));
-        List<Delivery> deliveries = deliveryRepository.findAllByNotificationId(id);
-        return new RegisterResult(new NotificationDetail(notification, deliveries), eventDuplicate, true);
+        return insertResult.inserted()
+            ? new RegisterOutcome.NewlyCreated(detail)
+            : new RegisterOutcome.EventDuplicate(detail);
     }
 
     @Transactional

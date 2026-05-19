@@ -5,7 +5,7 @@ import com.livenotification.notification.adapter.in.web.dto.NotificationResponse
 import com.livenotification.notification.adapter.in.web.dto.PageResponse;
 import com.livenotification.notification.adapter.in.web.dto.RegisterNotificationRequest;
 import com.livenotification.notification.application.NotificationService;
-import com.livenotification.notification.application.RegisterResult;
+import com.livenotification.notification.application.RegisterOutcome;
 import com.livenotification.notification.domain.NotificationId;
 import com.livenotification.notification.domain.RecipientId;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -33,14 +33,34 @@ public class NotificationController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKeyHeader) {
 
         IdempotencyKey headerKey = idempotencyKeyHeader == null ? null : new IdempotencyKey(idempotencyKeyHeader);
-        RegisterResult result = notificationService.register(request.toCommand(), headerKey);
+        RegisterOutcome outcome = notificationService.register(request.toCommand(), headerKey);
 
-        HttpStatus status = (result.replay() || result.eventDuplicate()) ? HttpStatus.OK : HttpStatus.ACCEPTED;
+        HttpStatus status;
+        boolean eventDuplicate;
+        boolean idempotentReplay;
+        switch (outcome) {
+            case RegisterOutcome.NewlyCreated ignored -> {
+                status = HttpStatus.ACCEPTED;
+                eventDuplicate = false;
+                idempotentReplay = false;
+            }
+            case RegisterOutcome.EventDuplicate ignored -> {
+                status = HttpStatus.OK;
+                eventDuplicate = true;
+                idempotentReplay = false;
+            }
+            case RegisterOutcome.IdempotentReplay ignored -> {
+                status = HttpStatus.OK;
+                eventDuplicate = false;
+                idempotentReplay = true;
+            }
+        }
+
         return ResponseEntity
             .status(status)
-            .header("X-Event-Duplicate", String.valueOf(result.eventDuplicate()))
-            .header("X-Idempotent-Replay", String.valueOf(result.replay()))
-            .body(NotificationResponse.from(result.detail()));
+            .header("X-Event-Duplicate", String.valueOf(eventDuplicate))
+            .header("X-Idempotent-Replay", String.valueOf(idempotentReplay))
+            .body(NotificationResponse.from(outcome.detail()));
     }
 
     @GetMapping("/{id}")

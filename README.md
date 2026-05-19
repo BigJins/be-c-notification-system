@@ -159,11 +159,11 @@ LiveClass 명세 5조건 ↔ 본 과제 구현 파일/메서드.
 |---|---|---|---|
 | 1차 | `uq_notification_event (event_id, recipient_id, type)` | notification INSERT 시점 — `NotificationRegistrationStore.insertIfAbsent` 가 `INSERT ... ON CONFLICT DO NOTHING RETURNING id` 실행 | `X-Event-Duplicate: true` (HTTP 200) |
 | 1.5차 | `uq_delivery_per_channel (notification_id, channel)` | delivery INSERT 시점 — `DeliveryRegistrarAdapter.scheduleFor` 내 fan-out 루프. 같은 channel 두 번 요청 거부 | (헤더 없음, 내부 DB 제약으로 처리) |
-| 2차 | `idempotency_record.idempotency_key` PK + 24h TTL | 요청 헤더 `Idempotency-Key` 있을 때만. `NotificationService.register` 진입 시 `IdempotencyService.lookupCurrent` 호출 | `X-Idempotent-Replay: true` (HTTP 200) |
+| 2차 | `idempotency_record.idempotency_key` PK + 24h TTL | 요청 헤더 `Idempotency-Key` 있을 때만. `NotificationService.register` 진입 시 `IdempotencyService.checkOutcome` 호출 (gate), 작업 후 `IdempotencyService.bind` (bind) | `X-Idempotent-Replay: true` (HTTP 200) |
 
-#### 응답 헤더 독립성
+#### 응답 헤더 매트릭스 (ADR-0002)
 
-`X-Event-Duplicate` 와 `X-Idempotent-Replay` 는 독립 boolean fact. 한 헤더의 값이 다른 헤더를 결정하지 않는다.
+`X-Event-Duplicate` 와 `X-Idempotent-Replay` 는 가능한 outcome 3개에 1:1 매핑 — `sealed RegisterOutcome { NewlyCreated, EventDuplicate, IdempotentReplay }`. `IdempotentReplay` 가 발생하면 `X-Event-Duplicate` 는 의미 없으므로 `false` 로 설정 (replay supersedes event-dup signaling). 자세한 이유: `docs/adr/ADR-0002-idempotency-race-semantics-and-outcome-typing.md`.
 
 | 시나리오 | X-Event-Duplicate | X-Idempotent-Replay | HTTP 상태 |
 |---|---|---|---|
@@ -194,7 +194,7 @@ return jdbcTemplate.query("""
 
 #### 2차 dedup atomic write
 
-`IdempotencyService.persistIfAbsent` 도 동일 패턴 — `INSERT INTO idempotency_record ... ON CONFLICT (idempotency_key) DO NOTHING`. 100 thread 동시 같은 key 요청 시 1건만 INSERT, 나머지는 no-op. `lookupCurrent` 의 read-before-write race 는 `MANDATORY` 트랜잭션 안에서 read → insert 순서로 처리.
+`IdempotencyService.bind` 도 동일 패턴 — `INSERT INTO idempotency_record ... ON CONFLICT (idempotency_key) DO UPDATE ... WHERE expires_at <= EXCLUDED.created_at`. 100 thread 동시 같은 key 요청 시 1건만 INSERT 가 살아남고, 나머지는 expires_at 가드로 no-op (first-write-wins). `checkOutcome` 의 read-before-write race 는 `MANDATORY` 트랜잭션 안에서 gate → work → bind 3-phase 로 처리 (ADR-0002).
 
 ### 5.2 channel = transport (Path B)
 

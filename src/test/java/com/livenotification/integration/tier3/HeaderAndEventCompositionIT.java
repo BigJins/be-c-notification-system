@@ -20,14 +20,16 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Tier 3 explicit verification of the 4-case header independence matrix:
+ * Tier 3 explicit verification of the 4-case header matrix (per ADR-0002):
  * <pre>
  *   Case A: new event  + new key       → 202, event-dup=false, replay=false
  *   Case B: dup event  + new key       → 200, event-dup=true,  replay=false
- *   Case C: new event  + replayed key  → 200, event-dup=true,  replay=true
- *   Case D: dup event  + replayed key  → 200, event-dup=true,  replay=true
+ *   Case C: new event  + replayed key  → 200, event-dup=false, replay=true
+ *   Case D: dup event  + replayed key  → 200, event-dup=false, replay=true
  * </pre>
- * X-Event-Duplicate and X-Idempotent-Replay are independent header dimensions.
+ * Replay supersedes event-duplicate signaling: when X-Idempotent-Replay is true,
+ * X-Event-Duplicate is suppressed. Previously the two headers were emitted as
+ * independent dimensions, which let the same outcome be decoded two ways.
  */
 class HeaderAndEventCompositionIT extends AbstractIntegrationTest {
 
@@ -53,23 +55,23 @@ class HeaderAndEventCompositionIT extends AbstractIntegrationTest {
         assertThat(resB2.getHeaders().getFirst("X-Event-Duplicate")).isEqualTo("true");
         assertThat(resB2.getHeaders().getFirst("X-Idempotent-Replay")).isEqualTo("false");
 
-        // ── Case C: new event + replayed key → 200, both true ────────────────
+        // ── Case C: new event + replayed key → 200, replay=true, event-dup=false ─
         String bodyC = buildBody("hec-C", "u-hec-C");
         ResponseEntity<Map> resC1 = post(bodyC, "key-hec-C");   // first submission
         assertThat(resC1.getStatusCode().value()).isEqualTo(202);
         ResponseEntity<Map> resC2 = post(bodyC, "key-hec-C");   // same event + same key
         assertThat(resC2.getStatusCode().value()).isEqualTo(200);
-        assertThat(resC2.getHeaders().getFirst("X-Event-Duplicate")).isEqualTo("true");
+        assertThat(resC2.getHeaders().getFirst("X-Event-Duplicate")).isEqualTo("false");
         assertThat(resC2.getHeaders().getFirst("X-Idempotent-Replay")).isEqualTo("true");
 
-        // ── Case D: duplicate event + replayed key → 200, both true ──────────
+        // ── Case D: duplicate event + replayed key → 200, replay=true, event-dup=false ─
         // Re-use Case C's key to ensure duplicate event + replayed key produces same result
         String bodyD = buildBody("hec-D", "u-hec-D");
         ResponseEntity<Map> resD1 = post(bodyD, "key-hec-D");   // first submission
         assertThat(resD1.getStatusCode().value()).isEqualTo(202);
         ResponseEntity<Map> resD2 = post(bodyD, "key-hec-D");   // same body + same key again
         assertThat(resD2.getStatusCode().value()).isEqualTo(200);
-        assertThat(resD2.getHeaders().getFirst("X-Event-Duplicate")).isEqualTo("true");
+        assertThat(resD2.getHeaders().getFirst("X-Event-Duplicate")).isEqualTo("false");
         assertThat(resD2.getHeaders().getFirst("X-Idempotent-Replay")).isEqualTo("true");
     }
 

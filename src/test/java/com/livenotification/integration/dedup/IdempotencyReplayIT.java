@@ -78,7 +78,7 @@ class IdempotencyReplayIT extends AbstractIntegrationTest {
     }
 
     @Test
-    @DisplayName("Case C: new event + replayed Idempotency-Key -> 200, both headers true")
+    @DisplayName("Case C: new event + replayed Idempotency-Key -> 200, replay=true, event-dup=false (ADR-0002)")
     void caseC_newEvent_replayedIdempotencyKey() throws Exception {
         String body = objectMapper.writeValueAsString(TestNotificationFixtures.registerBody(
             "idem-event-C", "uC", NotificationType.PAYMENT_CONFIRMED,
@@ -103,12 +103,12 @@ class IdempotencyReplayIT extends AbstractIntegrationTest {
             String.class);
 
         assertThat(second.getStatusCode().value()).isEqualTo(200);
-        assertThat(second.getHeaders().getFirst("X-Event-Duplicate")).isEqualTo("true");
+        assertThat(second.getHeaders().getFirst("X-Event-Duplicate")).isEqualTo("false");
         assertThat(second.getHeaders().getFirst("X-Idempotent-Replay")).isEqualTo("true");
     }
 
     @Test
-    @DisplayName("Case D: duplicate event + replayed Idempotency-Key -> 200, both headers true")
+    @DisplayName("Case D: duplicate event + replayed Idempotency-Key -> 200, replay=true, event-dup=false (ADR-0002)")
     void caseD_duplicateEvent_replayedIdempotencyKey() throws Exception {
         String body = objectMapper.writeValueAsString(TestNotificationFixtures.registerBody(
             "idem-event-D", "uD", NotificationType.PAYMENT_CONFIRMED,
@@ -133,7 +133,7 @@ class IdempotencyReplayIT extends AbstractIntegrationTest {
             String.class);
 
         assertThat(second.getStatusCode().value()).isEqualTo(200);
-        assertThat(second.getHeaders().getFirst("X-Event-Duplicate")).isEqualTo("true");
+        assertThat(second.getHeaders().getFirst("X-Event-Duplicate")).isEqualTo("false");
         assertThat(second.getHeaders().getFirst("X-Idempotent-Replay")).isEqualTo("true");
     }
 }
