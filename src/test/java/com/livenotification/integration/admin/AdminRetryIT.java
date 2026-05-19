@@ -5,8 +5,8 @@ import com.livenotification.admin.application.AdminRetryService;
 import com.livenotification.delivery.domain.ChannelType;
 import com.livenotification.integration.support.AbstractIntegrationTest;
 import com.livenotification.integration.support.TestNotificationFixtures;
-import com.livenotification.notification.domain.NotificationType;
 import com.livenotification.notification.domain.NotificationId;
+import com.livenotification.notification.domain.NotificationType;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,11 +21,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

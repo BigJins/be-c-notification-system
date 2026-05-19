@@ -6,11 +6,7 @@ import com.livenotification.delivery.domain.ChannelType;
 import com.livenotification.delivery.domain.Delivery;
 import com.livenotification.delivery.domain.DispatchResult;
 import com.livenotification.notification.application.NotificationView;
-import com.livenotification.notification.domain.EventId;
-import com.livenotification.notification.domain.NotificationId;
-import com.livenotification.notification.domain.NotificationPayload;
-import com.livenotification.notification.domain.NotificationType;
-import com.livenotification.notification.domain.RecipientId;
+import com.livenotification.notification.domain.*;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 

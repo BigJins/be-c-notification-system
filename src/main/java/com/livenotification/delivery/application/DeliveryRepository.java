@@ -2,13 +2,12 @@ package com.livenotification.delivery.application;
 
 import com.livenotification.delivery.domain.ChannelType;
 import com.livenotification.delivery.domain.Delivery;
-import com.livenotification.delivery.domain.DeliveryId;
 import com.livenotification.delivery.domain.DeliveryState;
 import com.livenotification.notification.domain.NotificationId;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.repository.query.Param;
 
 import java.util.Collection;

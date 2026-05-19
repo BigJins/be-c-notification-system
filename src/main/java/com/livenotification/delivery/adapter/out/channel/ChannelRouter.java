@@ -1,7 +1,7 @@
 package com.livenotification.delivery.adapter.out.channel;
 
-import com.livenotification.delivery.application.port.ChannelAdapterRouter;
 import com.livenotification.delivery.application.port.ChannelAdapter;
+import com.livenotification.delivery.application.port.ChannelAdapterRouter;
 import com.livenotification.delivery.domain.ChannelType;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;

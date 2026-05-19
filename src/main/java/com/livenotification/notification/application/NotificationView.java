@@ -1,11 +1,6 @@
 package com.livenotification.notification.application;
 
-import com.livenotification.notification.domain.EventId;
-import com.livenotification.notification.domain.Notification;
-import com.livenotification.notification.domain.NotificationId;
-import com.livenotification.notification.domain.NotificationPayload;
-import com.livenotification.notification.domain.NotificationType;
-import com.livenotification.notification.domain.RecipientId;
+import com.livenotification.notification.domain.*;
 
 import java.time.Instant;
 

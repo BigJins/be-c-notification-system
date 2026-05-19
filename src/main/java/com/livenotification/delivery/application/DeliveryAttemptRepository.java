@@ -1,7 +1,6 @@
 package com.livenotification.delivery.application;
 
 import com.livenotification.delivery.domain.DeliveryAttempt;
-import com.livenotification.delivery.domain.DeliveryAttemptId;
 import com.livenotification.delivery.domain.DeliveryAttemptState;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;

@@ -1,26 +1,15 @@
 package com.livenotification.delivery.application;
 
-import com.livenotification.delivery.application.metrics.DeliveryMetrics;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.livenotification.delivery.adapter.out.channel.InAppAdapter;
+import com.livenotification.delivery.application.metrics.DeliveryMetrics;
 import com.livenotification.delivery.application.port.ChannelAdapter;
 import com.livenotification.delivery.application.port.ChannelAdapterRouter;
-import com.livenotification.delivery.domain.ChannelType;
-import com.livenotification.delivery.domain.Delivery;
-import com.livenotification.delivery.domain.DeliveryAttempt;
-import com.livenotification.delivery.domain.DeliveryAttemptId;
-import com.livenotification.delivery.domain.DeliveryAttemptState;
-import com.livenotification.delivery.domain.DeliveryState;
-import com.livenotification.delivery.domain.DispatchResult;
-import com.livenotification.delivery.domain.RetryPolicy;
+import com.livenotification.delivery.domain.*;
 import com.livenotification.global.config.NotificationProperties;
 import com.livenotification.notification.application.NotificationLookup;
 import com.livenotification.notification.application.NotificationView;
-import com.livenotification.notification.domain.EventId;
-import com.livenotification.notification.domain.NotificationId;
-import com.livenotification.notification.domain.NotificationPayload;
-import com.livenotification.notification.domain.NotificationType;
-import com.livenotification.notification.domain.RecipientId;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.livenotification.notification.domain.*;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
