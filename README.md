@@ -31,27 +31,30 @@ Spring Boot 기반 알림 발송 시스템 과제 구현입니다.
 
 ## 실행 방법
 
-### 1. 사전 요구사항
+### 사전 요구사항
 
 - Java 21
 - Docker
 
-### 2. PostgreSQL 실행
+### 실행
 
 ```bash
 docker compose up -d postgres
-```
-
-### 3. 애플리케이션 실행
-
-```bash
 ./gradlew bootRun
 ```
+
+Docker 관련 참고:
+
+- 정상 실행 시 필요한 DB 컨테이너는 `docker compose`가 띄우는 PostgreSQL 1개뿐입니다.
+- 기본 이름은 보통 `assignment-postgres-1` 입니다.
+- `hopeful_aryabhata` 처럼 별도로 떠 있는 다른 PostgreSQL 컨테이너는 이 프로젝트에 필요하지 않습니다.
+- 이미 다른 PostgreSQL 컨테이너가 `5432` 포트를 점유 중이면 먼저 중지한 뒤 실행하는 것이 안전합니다.
 
 기본 접속 정보:
 
 - App: `http://localhost:8080`
 - Swagger UI: `http://localhost:8080/swagger-ui.html`
+- OpenAPI JSON: `http://localhost:8080/v3/api-docs`
 - Prometheus endpoint: `http://localhost:8080/actuator/prometheus`
 
 기본 DB 설정:
@@ -62,17 +65,15 @@ docker compose up -d postgres
 - DB user: `notification`
 - DB password: `notification`
 
-환경변수로 override 가능합니다.
-
 ## 요구사항 해석 및 가정
 
 ### 요구사항 해석
 
 - 알림 발송 실패가 비즈니스 트랜잭션에 영향을 주면 안 되므로, 등록과 발송을 분리했습니다.
-- 다만 “예외를 그냥 무시”하지 않기 위해 발송 시도는 `delivery_attempt` 로 영속화하고, 상태 전이와 실패 사유를 남기도록 설계했습니다.
-- “동일 이벤트 중복 발송 방지”는 헤더 없는 일반 요청도 막아야 하므로 `event_id + recipient_id + type` 수준의 dedup을 기본으로 잡았습니다.
-- 실제 메시지 브로커는 쓰지 않되 운영 환경으로 전환 가능해야 하므로, DB polling worker + lease + reaper 구조로 구현했습니다.
-- 이 구조에서 비즈니스 규칙은 `DeliveryRelayService` 와 상태 전이에 남기고, 작업 획득 메커니즘만 교체 가능하게 두었기 때문에 향후 Kafka/SQS consumer로의 전환 범위를 인프라 계층으로 제한할 수 있습니다.
+- 단, “예외를 그냥 무시”하지 않기 위해 발송 시도는 `delivery_attempt` 로 영속화하고, 상태 전이와 실패 사유를 남기도록 설계했습니다.
+- “동일 이벤트 중복 발송 방지”는 헤더 없는 일반 요청도 막아야 하므로 `event_id + recipient_id + type` 수준 dedup을 기본으로 잡았습니다.
+- 실제 메시지 브로커는 쓰지 않되 운영 환경으로 전환 가능해야 하므로 DB polling worker + lease + reaper 구조로 구현했습니다.
+- 비즈니스 규칙은 `DeliveryRelayService` 와 상태 전이에 남기고, 작업 획득 메커니즘만 교체 가능하게 두었기 때문에 향후 Kafka/SQS consumer로의 전환 범위를 인프라 계층으로 제한할 수 있습니다.
 
 ### 주요 가정
 
@@ -86,6 +87,27 @@ docker compose up -d postgres
 - 실제 운영 전환 시에는 DB polling 대신 Kafka/SQS 같은 브로커로 바꾸는 것이 적절합니다.
 - 현재 `X-Admin-Token` 기반 관리자 보호는 과제 범위에 맞춘 단순 구현이며, 실제 운영이라면 OAuth2/JWT가 적합합니다.
 - 장기 운영에서는 6개월 보관 정책용 cleanup worker, real SMTP, bounce webhook, tracing이 추가되어야 합니다.
+
+### 요구사항 ↔ 구현 매핑
+
+| 요구사항 | 구현 |
+|---|---|
+| 알림 등록 API | `POST /v1/notifications` |
+| 알림 상태 조회 | `GET /v1/notifications/{id}` |
+| 사용자 알림 목록 조회 | `GET /v1/notifications?recipientId=...&read=...` |
+| 읽음 처리 | `PATCH /v1/notifications/{id}/read` |
+| 비동기 처리 | `delivery_attempt` 저장 후 `DispatchWorker` 가 별도 처리 |
+| 중복 발송 방지 | event dedup + channel dedup + `Idempotency-Key` |
+| 재시도 / 최종 실패 | `RetryPolicy`, `DeliveryRelayService`, `DEAD` 상태 |
+| stuck 복구 | `ReaperWorker` + `claimed_until` lease |
+| 서버 재시작 후 재처리 | DB에 `delivery_attempt` 영속화 후 worker 재pickup |
+| 다중 인스턴스 중복 처리 방지 | `FOR UPDATE SKIP LOCKED` + claim lease |
+
+과제 설명의 표면 형태와 다른 부분:
+
+- 과제 문구는 단일 `channel` 중심으로 읽힐 수 있지만, 본 구현은 fan-out 을 명시적으로 표현하기 위해 `channels[]` 를 사용했습니다.
+- API prefix 는 `/api/...` 대신 버저닝을 위해 `/v1/...` 를 사용했습니다.
+- `notificationType` 대신 `type`, `referenceData` 대신 자유형 `payload` + `eventId` 를 사용했습니다.
 
 ## 설계 결정과 이유
 
@@ -140,18 +162,6 @@ docker compose up -d postgres
 - 최대 재시도 초과 시 `DEAD`
 - 실패 사유는 `delivery`, `delivery_attempt` 양쪽에 기록
 
-이유:
-
-- 재시도는 하되 무한 루프는 막아야 함
-- 운영자가 최종 실패 원인을 확인할 수 있어야 함
-
-### 6. 운영 대응
-
-- `ReaperWorker`: lease 만료된 stuck claim 복구
-- `AdminRetry`: 최종 실패 건 수동 재시도
-- cleanup worker: terminal attempt / expired idempotency 정리
-- metrics / k6 / ArchUnit 추가
-
 ## 미구현 / 제약사항
 
 - 실제 이메일 발송은 구현하지 않았고 mock adapter로 대체했습니다.
@@ -159,16 +169,32 @@ docker compose up -d postgres
 - 발송 예약 기능은 미구현입니다.
 - 타입별 알림 템플릿 관리 기능은 미구현입니다.
 - multi-device read sync는 단일 `read_at` 모델로 단순화했습니다.
-- `same Idempotency-Key + different request body` 가 동시에 들어오는 경쟁 상황은 `first-write-wins` 정책으로 정리했고, 더 강한 직렬화는 구현하지 않았습니다.
+- `same Idempotency-Key + different request body` 동시 경쟁은 `first-write-wins` 정책으로 정리했고, 더 강한 직렬화는 구현하지 않았습니다.
 
 ## AI 활용 범위
 
 - 설계 초안 브레인스토밍
-- 상태 전이/aggregate 분리 검토
-- 테스트 보강 아이디어 정리
-- 문서/ADR 초안 작성 보조
+  - 알림 도메인을 `Notification / Delivery / DeliveryAttempt` 로 나누는 구조를 검토할 때, 대안 비교와 장단점 정리에 AI를 보조적으로 활용했습니다.
+  - 특히 channel을 notification identity로 둘지, delivery transport로 둘지 같은 모델링 분기에서 아이디어 정리와 질문 목록 작성에 도움을 받았습니다.
 
-최종 설계 결정, 코드 수정, 테스트 검증, 요구사항 충족 여부 판단은 직접 확인하며 반영했습니다.
+- 상태 전이 / aggregate 분리 검토
+  - `PENDING / SENT / DEAD`, `READY / IN_PROGRESS / DONE / FAILED` 같은 상태 전이 규칙을 빠뜨리지 않도록 체크리스트 용도로 활용했습니다.
+  - aggregate 경계, dedup 계층, retry 책임 분리를 검토할 때 누락 가능성이 있는 예외 케이스를 점검하는 용도로 사용했습니다.
+
+- 테스트 보강 아이디어 정리
+  - 동시성 dedup, idempotency replay/conflict, stuck recovery, retry max attempts, admin retry 같은 시나리오를 더 촘촘히 검증하기 위한 테스트 아이디어를 정리하는 데 활용했습니다.
+  - 단위 테스트와 통합 테스트를 어떤 층위로 나눌지, 어떤 실패 케이스를 추가하면 좋은지 제안받고 실제 반영 여부는 직접 판단했습니다.
+
+- 문서 / ADR 초안 작성 보조
+  - README, 아키텍처 설명, ADR-0001/0002 초안 문구를 정리할 때 표현 보조와 구조화에 활용했습니다.
+  - 제출용 문서에서 요구사항 해석, 설계 이유, 미구현 범위를 더 읽기 쉽게 정리하는 데 도움을 받았습니다.
+
+- 디버깅 / 제출 전 점검 보조
+  - Swagger/OpenAPI 렌더링 문제, 수동 검증 시나리오 흐름, README 제출 형식 점검 같은 마감 전 체크리스트 성격의 작업에 보조적으로 활용했습니다.
+  - 다만 실제 오류 원인 확인, 의존성 수정, 수동 API 검증, Docker 재기동 후 end-to-end 재확인은 직접 수행했습니다.
+
+최종 설계 결정, 코드 수정, 테스트 검증, 요구사항 충족 여부 판단은 모두 직접 확인하며 반영했습니다.  
+즉 AI는 아이디어 정리와 초안 보조 도구로 사용했고, 구현 책임과 품질 판단 책임은 작성자인 제가 직접 가졌습니다.
 
 ## API 목록 및 예시
 
@@ -199,7 +225,7 @@ docker compose up -d postgres
   "eventId": "payment-1001",
   "recipientId": "user-1",
   "type": "PAYMENT_CONFIRMED",
-  "read": false,
+  "readAt": null,
   "deliveries": [
     {
       "channel": "EMAIL",
@@ -243,125 +269,11 @@ docker compose up -d postgres
 X-Admin-Token: dev-token-do-not-use-in-prod
 ```
 
-## 데이터 모델 설명
+## 평가자용 검증 시나리오
 
-### 핵심 테이블
+### 1. 자동 검증
 
-#### notification
-
-- 알림 이벤트 자체
-- 주요 컬럼:
-  - `id`
-  - `event_id`
-  - `recipient_id`
-  - `type`
-  - `payload`
-  - `read_at`
-
-#### delivery
-
-- 채널별 전달 상태
-- 주요 컬럼:
-  - `id`
-  - `notification_id`
-  - `channel`
-  - `state`
-  - `attempt_count`
-  - `sent_at`
-  - `last_error`
-
-#### delivery_attempt
-
-- worker가 처리하는 retry/claim 단위
-- 주요 컬럼:
-  - `id`
-  - `delivery_id`
-  - `state`
-  - `attempt_count`
-  - `next_attempt_at`
-  - `claimed_by`
-  - `claimed_until`
-  - `last_error`
-
-#### idempotency_record
-
-- idempotency key replay 방지용
-- 주요 컬럼:
-  - `idempotency_key`
-  - `request_hash`
-  - `target_id`
-  - `expires_at`
-
-### ERD
-
-```mermaid
-erDiagram
-    notification ||--o{ delivery : has
-    delivery ||--o{ delivery_attempt : retries
-
-    notification {
-        UUID id PK
-        VARCHAR event_id
-        VARCHAR recipient_id
-        VARCHAR type
-        JSONB payload
-        TIMESTAMPTZ read_at
-    }
-
-    delivery {
-        UUID id PK
-        UUID notification_id FK
-        VARCHAR channel
-        VARCHAR state
-        INTEGER attempt_count
-        TIMESTAMPTZ sent_at
-        VARCHAR last_error
-    }
-
-    delivery_attempt {
-        UUID id PK
-        UUID delivery_id FK
-        VARCHAR state
-        INTEGER attempt_count
-        TIMESTAMPTZ next_attempt_at
-        VARCHAR claimed_by
-        TIMESTAMPTZ claimed_until
-        VARCHAR last_error
-    }
-
-    idempotency_record {
-        VARCHAR idempotency_key PK
-        VARCHAR request_hash
-        UUID target_id
-        TIMESTAMPTZ expires_at
-    }
-```
-
-스키마는 [V1__init.sql](/C:/assignment/src/main/resources/db/migration/V1__init.sql) 에 정의되어 있습니다.
-
-## 비동기 처리 구조 및 재시도 정책 설명
-
-### 비동기 처리 구조
-
-1. API 요청은 `notification`, `delivery`, `delivery_attempt` 를 같은 트랜잭션으로 저장합니다.
-2. `EMAIL` 채널은 `delivery_attempt(state=READY)` 로 큐에 적재됩니다.
-3. `DispatchWorker` 가 주기적으로 claim 가능한 row를 가져옵니다.
-4. claim 후 adapter를 호출하고 결과에 따라 `SENT`, `READY`, `FAILED`, `DEAD` 로 전이합니다.
-5. worker가 중간에 죽어 claim이 오래 유지되면 `ReaperWorker` 가 다시 `READY` 로 되돌립니다.
-
-### 재시도 정책
-
-- `TransientFailure`: backoff 후 재시도
-- `PermanentFailure`: 즉시 실패 종료
-- 최대 재시도 초과: `DEAD`
-- 수동 재시도:
-  - admin endpoint로 새 `delivery_attempt` 를 발급
-  - 누적 `delivery.attempt_count` 는 유지
-  - session 단위 `delivery_attempt.attempt_count` 는 새 row에서 다시 시작
-
-## 테스트 실행 방법
-
-### 전체 테스트 실행
+가장 빠른 검증 방법은 전체 테스트 실행입니다.
 
 ```bash
 ./gradlew test
@@ -373,27 +285,169 @@ erDiagram
 - 81 tests
 - 81/81 pass
 
-### 테스트 범위
+대표 테스트:
 
-- 도메인 invariant 단위 테스트
-- retry / adapter / relay service 단위 테스트
-- dedup / replay / mark-read / retry / recovery / admin / cleanup 통합 테스트
-- ArchUnit 아키텍처 규칙 테스트
+- 사용자 대표 흐름: [NotificationFlowIT.java](/C:/assignment/src/test/java/com/livenotification/integration/tier3/NotificationFlowIT.java) `representativeUserScenario_endToEnd`
+- 동시 요청 dedup: [ConcurrentDedupIT.java](/C:/assignment/src/test/java/com/livenotification/integration/dedup/ConcurrentDedupIT.java) `concurrentSameEvent_only1Accepted_othersReturnDuplicate`
+- idempotency replay/conflict: [IdempotencyReplayIT.java](/C:/assignment/src/test/java/com/livenotification/integration/dedup/IdempotencyReplayIT.java), [IdempotencyConflictIT.java](/C:/assignment/src/test/java/com/livenotification/integration/dedup/IdempotencyConflictIT.java)
+- retry / 최종 실패: [RetrySuccessIT.java](/C:/assignment/src/test/java/com/livenotification/integration/retry/RetrySuccessIT.java), [RetryMaxAttemptsIT.java](/C:/assignment/src/test/java/com/livenotification/integration/retry/RetryMaxAttemptsIT.java), [PermanentFailureIT.java](/C:/assignment/src/test/java/com/livenotification/integration/retry/PermanentFailureIT.java)
+- 복구 / 재기동 / 다중 인스턴스: [StuckRecoveryIT.java](/C:/assignment/src/test/java/com/livenotification/integration/recovery/StuckRecoveryIT.java), [DurabilityIT.java](/C:/assignment/src/test/java/com/livenotification/integration/recovery/DurabilityIT.java), [MultiWorkerIT.java](/C:/assignment/src/test/java/com/livenotification/integration/recovery/MultiWorkerIT.java)
 
-## 저장소 구성
+### 2. 수동 검증
 
-```text
-src/main/java/com/livenotification
-├─ notification
-├─ delivery
-├─ idempotency
-├─ admin
-└─ global
+가장 쉬운 수동 검증 방법은 Swagger UI입니다.
 
-src/test/java/com/livenotification
-├─ architecture
-├─ delivery
-├─ idempotency
-├─ integration
-└─ notification
+접속 주소:
+
+- `http://localhost:8080/swagger-ui.html`
+- 또는 `http://localhost:8080/swagger-ui/index.html`
+
+서버 실행:
+
+```bash
+docker compose up -d postgres
+./gradlew bootRun
 ```
+
+아래 Step 1~7만 따라가면 주요 요구사항을 대부분 확인할 수 있습니다.
+
+#### Step 1. API 목록 확인
+
+Swagger UI에서 아래 API가 보이는지 확인합니다.
+
+- `POST /v1/notifications`
+- `GET /v1/notifications/{id}`
+- `GET /v1/notifications`
+- `PATCH /v1/notifications/{id}/read`
+- `POST /v1/admin/notifications/{id}/retry`
+
+#### Step 2. 알림 등록이 즉시 수락되는지 확인
+
+`POST /v1/notifications` 를 열고 `Try it out` 을 누른 뒤 아래 body로 `Execute` 합니다.
+
+```json
+{
+  "eventId": "demo-1",
+  "recipientId": "u1",
+  "type": "PAYMENT_CONFIRMED",
+  "channels": ["EMAIL", "IN_APP"],
+  "payload": {
+    "subject": "hello",
+    "body": "world"
+  }
+}
+```
+
+확인할 것:
+
+- 응답 코드 `202`
+- 응답 헤더 `X-Event-Duplicate: false`
+- 응답 body에 `deliveries` 2개 존재
+- `IN_APP` 는 `SENT`
+- `EMAIL` 은 처음엔 `PENDING`
+
+메모:
+
+- 이후 단계에서 쓰기 위해 response body의 `id` 값을 복사해 둡니다.
+
+#### Step 3. 상태 조회로 비동기 처리 확인
+
+`GET /v1/notifications/{id}` 를 열고 방금 복사한 `id` 로 조회합니다.
+
+즉시 조회 시 확인할 것:
+
+- `IN_APP = SENT`
+- `EMAIL = PENDING`
+
+몇 초 뒤 다시 같은 API를 실행해서 확인할 것:
+
+- `EMAIL = SENT`
+
+이 단계에서 “등록 API는 즉시 수락하고, 실제 이메일 발송은 worker가 나중에 처리한다”는 비동기 구조를 확인할 수 있습니다.
+
+#### Step 4. 목록 조회와 읽음 필터 확인
+
+`GET /v1/notifications` 를 열고 아래 값으로 실행합니다.
+
+- `recipientId = u1`
+- `read = false`
+- `page = 0`
+- `size = 20`
+
+확인할 것:
+
+- `u1` 의 알림 목록이 조회됨
+- `read=false` 필터가 적용됨
+
+#### Step 5. 읽음 처리 확인
+
+`PATCH /v1/notifications/{id}/read` 를 열고 같은 `id` 로 실행합니다.
+
+확인할 것:
+
+- 응답 코드 `204`
+
+그 다음 `GET /v1/notifications/{id}` 를 다시 조회해서 확인할 것:
+
+- `readAt` 이 채워짐
+
+#### Step 6. 동일 이벤트 중복 발송 방지 확인
+
+다시 `POST /v1/notifications` 로 돌아가서 Step 2의 JSON을 그대로 한 번 더 실행합니다.
+
+확인할 것:
+
+- 응답 코드 `200`
+- 응답 헤더 `X-Event-Duplicate: true`
+
+#### Step 7. 영구 실패 + 관리자 재시도 확인
+
+먼저 `POST /v1/notifications` 로 아래 body를 전송합니다.
+
+```json
+{
+  "eventId": "demo-dead-1",
+  "recipientId": "u1",
+  "type": "PAYMENT_CONFIRMED",
+  "channels": ["EMAIL"],
+  "payload": {
+    "subject": "dead",
+    "body": "world",
+    "x_test_failure": "permanent"
+  }
+}
+```
+
+확인할 것:
+
+- 잠시 후 `GET /v1/notifications/{id}` 조회 시 `EMAIL` delivery 가 `DEAD`
+
+그 다음 `POST /v1/admin/notifications/{id}/retry` 를 열고:
+
+- Path의 `id` 입력
+- Header에 `X-Admin-Token: dev-token-do-not-use-in-prod` 입력
+
+실행 후 확인할 것:
+
+- 응답 코드 `204`
+
+#### 추가 확인 1. Idempotency-Key replay / conflict
+
+이 시나리오는 Swagger보다 CLI가 더 편합니다.
+
+- 같은 `Idempotency-Key` + 같은 body -> replay (`200`)
+- 같은 `Idempotency-Key` + 다른 body -> conflict (`409`)
+
+이 동작은 [IdempotencyReplayIT.java](/C:/assignment/src/test/java/com/livenotification/integration/dedup/IdempotencyReplayIT.java), [IdempotencyConflictIT.java](/C:/assignment/src/test/java/com/livenotification/integration/dedup/IdempotencyConflictIT.java) 로 자동 검증됩니다.
+
+#### 추가 확인 2. 운영 시그널
+
+브라우저에서 아래 주소를 열면 메트릭을 직접 볼 수 있습니다.
+
+- `http://localhost:8080/actuator/prometheus`
+
+검색 키워드:
+
+- `notification`
+- `delivery`
+- `idempotency`

@@ -8,6 +8,7 @@ import com.livenotification.notification.application.NotificationService;
 import com.livenotification.notification.application.RegisterOutcome;
 import com.livenotification.notification.domain.NotificationId;
 import com.livenotification.notification.domain.RecipientId;
+import org.springdoc.core.annotations.ParameterObject;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -72,7 +73,7 @@ public class NotificationController {
     public PageResponse<NotificationResponse> findByRecipient(
             @RequestParam("recipient_id") String recipientId,
             @RequestParam(value = "read", required = false) Boolean read,
-            @PageableDefault(size = 20) Pageable pageable) {
+            @ParameterObject @PageableDefault(size = 20) Pageable pageable) {
         return PageResponse.from(
             notificationService.findByRecipient(new RecipientId(recipientId), read, pageable),
             NotificationResponse::from);

@@ -5,6 +5,10 @@ build/
 .DS_Store
 .testcontainers.properties
 
+# bootRun runtime logs (not source artefacts)
+bootrun.out.log
+bootrun.err.log
+
 # local Claude Code settings (machine-specific, do not publish)
 .claude/
 

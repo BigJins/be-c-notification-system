@@ -34,7 +34,7 @@ dependencies {
     implementation("io.micrometer:micrometer-registry-prometheus")
 
     // API docs
-    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0")
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.7.0")
 
     // Test (Awaitility 는 spring-boot-starter-test 의 transitive — 별도 줄 불필요)
     testImplementation("org.springframework.boot:spring-boot-starter-test")
