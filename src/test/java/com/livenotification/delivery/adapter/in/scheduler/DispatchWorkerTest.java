@@ -21,6 +21,8 @@ import static org.mockito.Mockito.when;
 
 class DispatchWorkerTest {
 
+    private static final WorkerIdentity TEST_IDENTITY = () -> "worker-test";
+
     @Test
     void tick_claimsOnlyUpToAvailablePermits() {
         DeliveryRelayService relayService = mock(DeliveryRelayService.class);
@@ -30,11 +32,11 @@ class DispatchWorkerTest {
         when(relayService.claimBatch(anyInt(), anyString(), any()))
             .thenReturn(List.of(new DeliveryAttemptId(UUID.randomUUID())));
 
-        DispatchWorker worker = new DispatchWorker(relayService, properties, semaphore, executor);
+        DispatchWorker worker = new DispatchWorker(relayService, properties, semaphore, executor, TEST_IDENTITY);
 
         worker.tick();
 
-        verify(relayService).claimBatch(2, "worker-" + ProcessHandle.current().pid(), Duration.ofSeconds(30));
+        verify(relayService).claimBatch(2, "worker-test", Duration.ofSeconds(30));
     }
 
     @Test
@@ -44,7 +46,7 @@ class DispatchWorkerTest {
         Semaphore semaphore = new Semaphore(0, true);
         ExecutorService executor = mock(ExecutorService.class);
 
-        DispatchWorker worker = new DispatchWorker(relayService, properties, semaphore, executor);
+        DispatchWorker worker = new DispatchWorker(relayService, properties, semaphore, executor, TEST_IDENTITY);
 
         worker.tick();
 

@@ -231,6 +231,8 @@ return jdbcTemplate.query("""
 | 2. 단일 인스턴스 내 외부 채널 보호 | 100 thread 가 동시에 외부 SMTP 에 폭주 | `Semaphore(semaphore-permits=16, fair)` — `DispatchWorker.dispatchAsync` 에서 `tryAcquire` + Virtual Thread submit. permit ownership 은 task 로 *이전* (이중 release 방지) |
 | 3. Stuck worker | 워커가 중도 사망 / hang 시 row 가 영구 IN_PROGRESS | `claimed_until` lease (30s) + reaper (`ReaperWorker` — Task 24 pending) 가 만료 row 를 `state=READY` 로 복귀. `DeliveryRelayService.releaseExpiredClaims` 구현 완료 |
 
+> **`claimed_by` 포맷.** `<host>-<pid>` 항상 (`RuntimeWorkerIdentity`). K8s 에선 `HOSTNAME=<pod-name>` 이 prefix 로 들어가므로 운영 대시보드에서 pod 이름 prefix 로 grep 가능. 환경변수 유무가 *포맷 자체* 를 바꾸지 않도록 단일 contract 로 고정 (이전엔 `HOSTNAME` 유무에 따라 format 이 달라져 테스트가 환경 의존).
+
 #### 왜 Virtual Thread + Semaphore 인가
 
 본 시스템의 worker 작업 = *외부 I/O 중심* (SMTP 호출, DB transaction). Platform thread 대신 Virtual Thread 를 쓰면 *수천 동시 dispatch* 도 OS thread 수 제약 없이 처리. Semaphore 는 *외부 채널* 의 분당 호출량을 캡 (외부 SMTP rate limit 보호) — Virtual Thread 의 동시성을 *명시적으로 제한* 하는 신호.

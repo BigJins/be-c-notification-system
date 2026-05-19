@@ -23,6 +23,7 @@ public class DispatchWorker {
     private final NotificationProperties properties;
     private final Semaphore semaphore;
     private final ExecutorService virtualThreadExecutor;
+    private final WorkerIdentity workerIdentity;
 
     @Scheduled(fixedDelayString = "${notification.worker.poll-interval}")
     public void tick() {
@@ -34,7 +35,7 @@ public class DispatchWorker {
             }
             List<DeliveryAttemptId> claimed = relayService.claimBatch(
                 Math.min(properties.worker().batchSize(), availablePermits),
-                workerId(),
+                workerIdentity.value(),
                 properties.worker().claimLease());
             for (DeliveryAttemptId id : claimed) {
                 dispatchAsync(id);
@@ -76,11 +77,5 @@ public class DispatchWorker {
         } finally {
             if (acquired) semaphore.release();   // leak guard
         }
-    }
-
-    private String workerId() {
-        String hostname = System.getenv("HOSTNAME");
-        if (hostname != null && !hostname.isBlank()) return hostname;
-        return "worker-" + ProcessHandle.current().pid();
     }
 }
