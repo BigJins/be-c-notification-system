@@ -137,17 +137,23 @@ public class DeliveryRelayService {
         } catch (TimeoutException e) {
             return new DispatchResult.TransientFailure("dispatch timeout after " + timeout, e);
         } catch (ExecutionException e) {
-            return classifyException(e.getCause());
+            return adapterContractViolation(adapter, delivery, e.getCause());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return new DispatchResult.TransientFailure("interrupted", e);
         }
     }
 
-    private DispatchResult classifyException(Throwable cause) {
-        if (cause instanceof IllegalArgumentException)
-            return new DispatchResult.PermanentFailure("invalid input", cause);
-        return new DispatchResult.TransientFailure("unclassified runtime error", cause);
+    /**
+     * Adapter threw despite contract (see {@link ChannelAdapter} javadoc): never silently retry.
+     * Surface as a design violation so the bug paged-out fast, and terminate the attempt as DEAD
+     * so an infinite Transient loop can't hide it. Per ADR-0001.
+     */
+    private DispatchResult adapterContractViolation(ChannelAdapter adapter, Delivery delivery, Throwable cause) {
+        metrics.recordDesignViolation("adapter_contract_violation");
+        log.error("DESIGN_VIOLATION: adapter threw, channel={} deliveryId={} adapter={}",
+            delivery.getChannel(), delivery.getId().value(), adapter.getClass().getSimpleName(), cause);
+        return new DispatchResult.PermanentFailure("adapter_contract_violation", cause);
     }
 
     private void finalizeFailure(DeliveryAttempt attempt, Delivery delivery, String reason, Instant now) {
